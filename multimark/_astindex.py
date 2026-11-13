@@ -50,12 +50,21 @@ def count_params(fn: ast.AST) -> int:
 
 @dataclass(frozen=True)
 class FunctionUnit:
-    """Unità di funzione di §3.2. ``index`` = ordine di visita (``MODULE_INDEX`` per ``MODULE``)."""
+    """Unità di funzione di §3.2. ``index`` = ordine di visita (``MODULE_INDEX`` per ``MODULE``).
+
+    ``dup_index``: posizione della funzione fra quelle con lo stesso ``fid``, in ordine di file
+    (0 se il ``fid`` è unico; 0 per ``MODULE``). Serve **solo** alla diagnostica (flip rate): non
+    entra né in ``phi`` né nella maschera. Funzioni con lo stesso ``fid`` condividono le chiavi
+    ``(fid, canale, rango)`` dei loro siti, quindi stessi bit e stessa maschera (decisione di
+    Ivan, 13 novembre 2026): i voti non si contraddicono e ogni disambiguazione romperebbe
+    l'invarianza all'estrazione e al riordino delle funzioni.
+    """
 
     index: int
     name: str
     n_params: int
     node: Optional[ast.AST] = field(default=None, compare=False, repr=False, hash=False)
+    dup_index: int = field(default=0, compare=False)
 
     @property
     def fid(self) -> tuple[str, int]:
@@ -94,13 +103,17 @@ class AstIndex:
         self.slots: dict[int, Slot] = {}
         self.units: dict[int, FunctionUnit] = {}
         self.functions: list[FunctionUnit] = []
+        seen_fids: dict[tuple[str, int], int] = {}
         stack: list[tuple[ast.AST, Slot, FunctionUnit]] = [
             (tree, Slot(None, "", None), MODULE_UNIT)
         ]
         while stack:
             node, slot, unit = stack.pop()
             if unit.is_module and isinstance(node, FUNCTION_TYPES):
-                unit = FunctionUnit(len(self.functions), node.name, count_params(node), node)
+                fid = (node.name, count_params(node))
+                dup = seen_fids.get(fid, 0)
+                seen_fids[fid] = dup + 1
+                unit = FunctionUnit(len(self.functions), fid[0], fid[1], node, dup)
                 self.functions.append(unit)
             self.position[id(node)] = len(self.order)
             self.order.append(node)
@@ -146,6 +159,14 @@ class AstIndex:
         for node in self.order:
             if self.units[id(node)] == unit:
                 yield node
+
+    @property
+    def n_duplicate_fids(self) -> int:
+        """Numero di ``fid`` distinti condivisi da almeno due funzioni."""
+        counts: dict[tuple[str, int], int] = {}
+        for unit in self.functions:
+            counts[unit.fid] = counts.get(unit.fid, 0) + 1
+        return sum(1 for n in counts.values() if n > 1)
 
     @property
     def all_units(self) -> list[FunctionUnit]:

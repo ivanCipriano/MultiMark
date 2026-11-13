@@ -12,10 +12,14 @@ Passi, identici in inserimento e rilevazione:
 4. ordine di uscita (§3.9): funzioni in ordine di visita, poi ``MODULE``; dentro l'unità, canali
    1..8; dentro il canale, rango.
 
-Nota (TODO(ivan)): il rango è per unità di funzione (oggetto), come nello pseudocodice di §3.9. Due
-funzioni con lo stesso ``fid`` (stesso nome e numero di parametri, es. metodi omonimi di classi
-diverse) hanno quindi siti con la stessa chiave ``(fid, canale, rango)``; in P1 va deciso se è
-voluto (stesso ``off`` e stessa maschera) o se va disambiguato.
+Funzioni con lo stesso ``fid`` (decisione di Ivan, 13 novembre 2026). Il rango è per unità di
+funzione (oggetto), come nello pseudocodice di §3.9: due funzioni con lo stesso ``fid`` (es. metodi
+omonimi di classi diverse) hanno siti con la stessa chiave ``(fid, canale, rango)``, quindi stessi
+``phi`` e stessa maschera. È voluto: i voti vanno sugli stessi bit con la stessa maschera e non si
+contraddicono, e ogni disambiguazione (nome della classe, ordinale nel file) romperebbe
+l'invarianza all'estrazione e al riordino. Per la sola diagnostica (flip rate) ogni sito porta
+``dup_index`` (posizione della funzione fra quelle con lo stesso ``fid``, in ordine di file), che
+non entra né in ``phi`` né nella maschera né in ``key``.
 """
 
 from __future__ import annotations
@@ -49,6 +53,11 @@ class Site:
         """``(fid_name, n_params, channel, rank)``: chiave del sito nei confronti fra
         rilevazioni."""
         return (self.unit.name, self.unit.n_params, self.channel, self.rank)
+
+    @property
+    def dup_index(self) -> int:
+        """Solo diagnostica: posizione della funzione fra quelle con lo stesso ``fid``."""
+        return self.unit.dup_index
 
 
 def _resolve_overlaps(candidates: list[Match], index: AstIndex) -> list[Match]:

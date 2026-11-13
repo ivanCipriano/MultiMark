@@ -59,6 +59,11 @@ class NameSite:
     def key(self) -> tuple[str, int, str, int]:
         return (self.unit.name, self.unit.n_params, "names", self.rank)
 
+    @property
+    def dup_index(self) -> int:
+        """Solo diagnostica: posizione della funzione fra quelle con lo stesso ``fid``."""
+        return self.unit.dup_index
+
 
 def _target_names(target: ast.AST) -> Iterable[ast.Name]:
     """``Name`` legati da un bersaglio di assegnazione (tuple, liste, starred)."""

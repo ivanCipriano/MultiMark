@@ -173,3 +173,41 @@ def test_formatting_and_comments_do_not_matter() -> None:
 
 def test_docstrings_contain_no_sites() -> None:
     assert read('def f(a):\n    """a < 1 and x = x + 1"""\n    return a\n') == []
+
+
+DUP_FIDS = src(
+    """
+    class A:
+        def run(self, v):
+            return v < 1
+    class B:
+        def run(self, v):
+            return v < 2
+        def other(self):
+            return self.x > 1
+    def run(a, b):
+        return a < 3
+    """
+)
+
+
+def test_duplicate_fids_share_keys_and_get_dup_index() -> None:
+    index = AstIndex.from_code(DUP_FIDS)
+    assert [(u.fid, u.dup_index) for u in index.functions] == [
+        (("run", 2), 0),
+        (("run", 2), 1),
+        (("other", 1), 0),
+        (("run", 2), 2),
+    ]
+    assert index.n_duplicate_fids == 1
+    sites = find_sites_in_code(DUP_FIDS)
+    runs = [s for s in sites if s.unit.name == "run"]
+    assert [s.key for s in runs] == [("run", 2, "compare_dir", 0)] * 3
+    assert [s.dup_index for s in runs] == [0, 1, 2]
+    assert MODULE_UNIT.dup_index == 0
+
+
+def test_dup_index_does_not_enter_key() -> None:
+    a = find_sites_in_code("def f(a):\n    return a < 1\n")
+    b = find_sites_in_code("def f(a):\n    return a\ndef f(a):\n    return a < 1\n")
+    assert a[0].key == b[0].key and (a[0].dup_index, b[0].dup_index) == (0, 1)
