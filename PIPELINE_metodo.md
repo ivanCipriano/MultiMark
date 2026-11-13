@@ -1,7 +1,7 @@
 # PIPELINE_metodo.md — MultiMark: watermark multi-bit post-hoc per Python nel benchmark wm-bench
 
 > **Destinatario:** Claude Code. **Natura:** specifica vincolante di implementazione. In caso di ambiguità, fermati e chiedi a Ivan; non reinterpretare.
-> **Versione:** 1.1, 12 novembre 2026. **Repository:** `multimark` (libreria del metodo, questo file sta nella sua radice) e `wm-bench` (benchmark, commit di partenza `a64f4ea`, ramo `posthoc-multimark`), vedi §0.4.
+> **Versione:** 1.2, 13 novembre 2026 (dopo l'inventario di P0: canali nuovi 9–14, variabili di modulo, criteri di P2 rivisti, autovalidazione `mcss` rivista, rilevazione aggregata; le modifiche rispetto alla 1.1 sono marcate «**[v1.2]**»). **Repository:** `multimark` (libreria del metodo, questo file sta nella sua radice) e `wm-bench` (benchmark, commit di partenza `a64f4ea`, ramo `posthoc-multimark`), vedi §0.4.
 > **Convenzioni:** prosa, docstring e commenti in italiano; identificatori, nomi di file, chiavi di configurazione e log in inglese (CLAUDE.md del benchmark). Le pagine di MCSS sono quelle del PDF arXiv 2607.06009v1.
 
 ---
@@ -19,7 +19,9 @@ Due metodi nuovi nel benchmark, entrambi post-hoc (`CodeEmbedder + Detector`), s
 
 **Lettura e scrittura del codice (vale per tutto il documento).** I siti si trovano e si leggono **solo** sull'`ast` della libreria standard, che non vede spazi, a capo e commenti; i canali di formattazione sono esclusi. LibCST si usa **solo per scrivere** la forma richiesta di un sito e per rinominare le variabili rispettando gli scope (come fa l'attacco T1.4 del benchmark), così il resto del file resta identico, commenti compresi; dopo ogni scrittura il file viene riletto con `ast` e il valore deve coincidere. Il segnale del watermark non dipende mai dal CST (è il punto debole del metodo di Zottarelli segnalato dal prof il 5 novembre).
 
-**Configurazione di base di `multimark`** (§3 per le specifiche): identificazione per confronto con il registro (1A) con punteggio principale a `N_reg = 1` e secondari a `N_reg ∈ {16, 1024}`; mascheramento con la chiave (1B); legame sito → bit per (funzione, canale) con offset da (nome della funzione, numero di parametri) (2A); forme canoniche indipendenti dai nomi (2D); canale dei nomi V2 (bit da HMAC del nome normalizzato, candidati da un modello di linguaggio piccolo con ripiego non neurale); voto semplice (pesi uniformi); codice compatto con t = 2 (B = 32); messaggio di 24 bit.
+**Configurazione di base di `multimark`** (§3 per le specifiche): identificazione per confronto con il registro (1A) con punteggio principale a `N_reg = 1` e secondari a `N_reg ∈ {16, 1024}`; mascheramento con la chiave (1B); legame sito → bit per (funzione, canale) con offset da (nome della funzione, numero di parametri) (2A); forme canoniche indipendenti dai nomi (2D); **[v1.2]** 14 canali strutturali: gli 8 di MCSS più i 6 nuovi di §3.3.1b (`channels=extended`); canale dei nomi V2 (bit da HMAC del nome normalizzato, candidati da un modello di linguaggio piccolo con ripiego non neurale), parametri esclusi, variabili di modulo secondo la decisione O (§7); voto semplice (pesi uniformi); codice compatto con t = 2 (B = 32); messaggio di 24 bit.
+
+**[v1.2] Obiettivo sul codice corto, ridefinito dopo l'inventario di P0.** Sulle funzioni di L1 (mediana 1–2 siti, 0% con ≥ 13) nessun metodo strutturale post-hoc può rilevare il singolo campione: non è un difetto da correggere con più canali (stima P0: con 8 canali nuovi la frazione di campioni L1 con ≥ 8 siti passa da 3–8% a 4–10%). La tesi misura quindi **due cose**: (1) la rilevazione per campione nella fascia 8–31 siti, dove MCSS a 32 bit non entra e `multimark` sì (L2 con 21+ righe, ClassEval); (2) la **rilevazione aggregata** su k campioni dello stesso modello (§5.10), che è la risposta onesta per L1. La F5.1 della tesi ha l'asse x in numero di siti; la selezione dei file CodeNet per l'autovalidazione di `mcss` (§4.4) è in **bit** (`n_bits_v1`, come la Tabella 3 del paper): i due assi non vanno confusi.
 
 ### 0.2 Cosa è escluso
 
@@ -97,6 +99,12 @@ Ordine = priorità rivista. Tempi in giorni di lavoro di Claude Code, test compr
 
 **Ivan:** crea l'ambiente dal file, lancia l'inventario, riporta `P0_inventory.txt`. **Claude Code:** tutto il resto.
 
+**[v1.2] Esito di P0 (13 novembre, `P0_inventory.txt`, `P0_candidates.txt`, `P0_mcss_selftest.txt`; libreria `fe44298`).**
+- L1 dev: mediana 1–2 siti per campione, 22–45% con zero siti, 0% con ≥ 13. L2 dev: media 3,6–4,7. ClassEval: media 11,6, 33% con ≥ 13. Pool CodeNet L2 (5.449 file, profilo base): media 3,1 siti, 0,31% con ≥ 32, 3,4% con ≥ 13; `n_vars` medio 0,37 perché le soluzioni CodeNet sono quasi tutte a livello di modulo (`n_functions` mediana 0) e la regola di §3.6.1 contava solo le variabili dentro le funzioni. Canale più frequente: `equality_dir` (nel paper è `operand_order`, p. 5: la nostra condizione «esattamente una costante numerica» è più stretta, deviazione 6 di §4.2).
+- Candidati (23 pattern, ranking `no_overlap` su L1): `range_zero` 148, `slice_bound` 124, `else_return` 90, `nested_if` 59, `square` 46, `range_len` 28, `return_none` 25, `bool_return` 18, poi ≤ 13. `str_method` forma 0 presente nel 78–85% dei campioni L2 ma la forma 1 (`str.split(s)`) non compare mai e serve una guardia sul tipo. `elif` e `else: if` sono lo stesso `ast`: non è un canale. Decisioni sui canali: §3.3.1b.
+- Autovalidazione `mcss`: nel pool solo 37 file con `n_bits_v1 ≥ 32` e 18 nella fascia 32–39 (15 problemi); su quei 18, variabili 7,50 contro 11,9 (−37%) e siti strutturali 18,0 contro 10,9 (+65%); totale 33,0 contro 34,6 (−5%). Letture: (i) il paper usa anch'esso CodeNet Python (p. 7, «Dataset»), quindi la differenza è nelle regole di lettura, non nei dati: la più probabile è l'esclusione delle variabili di modulo; (ii) la fascia è definita sui bit totali, perciò dentro la fascia pochi nomi implicano molti siti strutturali (anticorrelazione da selezione): il confronto componente per componente non misura la fedeltà, il totale sì. Conseguenze in §4.4 (criterio sul totale, selezione rifatta dopo la decisione O) e in §7 (K, O).
+- Decisione C chiusa: parametri **esclusi** dal canale dei nomi di `multimark` (rinominarli cambia la firma e rompe i test di chi chiama); nel pool i parametri valgono il 31% dei siti dei nomi (2.619 contro 1.995): la perdita si dichiara e `names.include_params=true` resta un punto dell'ablazione (§6.3).
+
 ---
 
 ### P1 — Libreria: inserimento e rilevazione, `mcss` e `multimark` (6 giorni)
@@ -106,7 +114,8 @@ Ordine = priorità rivista. Tempi in giorni di lavoro di Claude Code, test compr
 **File.** Repository `multimark`: completamento di `multimark/*` secondo §3 e §4; `tests/test_*.py`; `tests/test_roundtrip_property.py` (Hypothesis, dipendenza di sviluppo). Tutto in questa fase sta nel repository `multimark`; alla fine Ivan aggiorna il submodule nel benchmark.
 
 **Passi.**
-1. `channels.py`: scrittura di ogni canale con LibCST (`PositionProvider` per ritrovare il nodo dal sito, §3.3.3). Dopo ogni scrittura: `ast.parse` del risultato e rilettura del sito; se la rilettura non dà il valore scritto, la scrittura si annulla e il sito è `skipped` (contato in `extra`).
+0. **[v1.2] Prima di tutto, in un commit a parte (`[P1] names: module-level variables option`)**, così Ivan può rilanciare l'inventario sul cluster mentre P1 prosegue: (a) opzione `names.module_level` (§3.6.1) nel lettore e nell'inventario (`--module-level on|off`), con le guardie elencate lì; (b) in `candidates.py` la forma `g.f0_guarded` di `str_method` (ricevitore letterale stringa, f-string, o chiamata a `input`/`str`/`repr`; §3.3.1b, canale 15 facoltativo); (c) test. Poi Ivan: aggiorna il submodule, `apply_patches.sh multimark`, rilancia `inventory_sites.sh` (tutti i gruppi, profili `base` e `mcss`, entrambi i valori di `--module-level`), `candidates` e `selftest`; i file nuovi si chiamano `P1_inventory_modlevel.txt`, `P1_candidates_modlevel.txt`, `P1_mcss_selftest_modlevel.txt` (i vecchi non si toccano, regola 5). Da quei numeri Ivan chiude le decisioni O e P di §7.
+1. `channels.py`: lettura dei 6 canali nuovi di §3.3.1b (9–14) e scrittura di **tutti** i canali con LibCST (`PositionProvider` per ritrovare il nodo dal sito, §3.3.3). Dopo ogni scrittura: `ast.parse` del risultato e rilettura del sito; se la rilettura non dà il valore scritto, la scrittura si annulla e il sito è `skipped` (contato in `extra`). Opzione `channels` (§3.11): `mcss8` (canali 1–8) e `extended` (1–14).
 2. `codec.py`: alfabeto a 6 bit (§3.7), codice compatto (§3.8), decodifica per cancellazioni.
 3. `linking.py`: `phi_positional` (mcss) e `phi_function` (multimark), maschera (§3.4–3.5).
 4. `names.py`: V1 (4 stili con estensione dei nomi di una parola, §4.3), V1b, V2 con il proponente `StaticProposer` (§3.6.4); interfaccia `Proposer` per il modello neurale di P3.
@@ -117,10 +126,12 @@ Ordine = priorità rivista. Tempi in giorni di lavoro di Claude Code, test compr
 
 **Criteri di accettazione.**
 - Round trip 100% sui frammenti sintetici con `N ≥ B`, per `mcss` e `multimark`; invarianza alla formattazione 100%.
-- Ogni canale ha un test «cambio di forma = stesso output»: per ogni frammento di test con un `main` eseguibile, l'output di forma 0 e forma 1 coincide (`subprocess` con timeout 5 s, senza sandbox: sono frammenti scritti da noi).
+- Ogni canale ha un test «cambio di forma = stesso output»: per ogni frammento di test con un `main` eseguibile, l'output di forma 0 e forma 1 coincide (`subprocess` con timeout 5 s, senza sandbox: sono frammenti scritti da noi). **[v1.2]** Per i canali 9–14 il test include i casi limite elencati in §3.3.1b (es. `square` con `float`, `nested_if` con tre `if` annidati, `else_return` seguito da un altro `if`).
+- **[v1.2]** Test di non interferenza (§3.3.2 punto 3) su frammenti che combinano canali vecchi e nuovi sullo stesso nodo (`if a and b: return X` + istruzioni dopo; `L = list(a)`; `x = x + 1` dentro `range(0, x + 1)`): `sites(embed(code)) == sites(code)` per tutte le 2^k scritture possibili dei siti coinvolti.
 - Tempo di inserimento + rilevazione su un file da 100 righe < 1 s su CPU (misurato nel log).
+- **[v1.2]** `docs/reports/P1_esempi.md` (regola 12) con almeno un esempio per ciascun canale nuovo.
 
-**Ivan:** nulla. **Claude Code:** tutto.
+**Ivan:** rilancia inventario, candidati e selftest dopo il passo 0 e riporta i tre file. **Claude Code:** tutto il resto.
 
 ---
 
@@ -142,15 +153,18 @@ Ordine = priorità rivista. Tempi in giorni di lavoro di Claude Code, test compr
 2. Shim: `embed_batch`/`detect_batch`; `extra` secondo §3.10.4. Stato di inserimento secondo §3.9.3.
 3. Modifiche comuni (§5), ciascuna in un commit `common` con il suo test di retrocompatibilità.
 4. Smoke test locale: `bench +experiment=smoke stage=…` sulle fixture `tests/fixtures/tiny/` per i due metodi (watermark → execute → detect → calibrate → metrics), con `paths=local`.
-5. Ivan lancia su L1 dev: `watermark`, `execute`, `detect` (positivi, `neg_human`, `neg_llm`), `calibrate` (provvisorio, solo L1), `metrics` per `mcss` e `multimark`, entrambi i modelli.
+5. Ivan lancia su L1 dev **e L2 dev** **[v1.2]**: `watermark`, `execute`, `detect` (positivi, `neg_human`, `neg_llm`), `calibrate` (provvisorio, L1+L2), `metrics` per `mcss` e `multimark`, entrambi i modelli; su ClassEval (canoniche come ingresso, come fa il benchmark per L3) solo `watermark`, `execute`, `detect` di `multimark`. In più `scripts/mcss_paper_attacks.py --attack none` sulla selezione di §4.4 (criterio (a)).
 
-**Ingressi.** Baseline L1 dev. **Uscite.** Tabelle `watermarked/`, `detection/`, `thresholds/`, `metrics/` dei due metodi su L1 dev; `docs/milestone_logs/P2_l1_dev.txt` con `scripts/report_metrics.py` (estendere lo script ai due metodi se filtra per nome).
+**Ingressi.** Baseline L1 dev, L2 dev; canoniche ClassEval; selezione CodeNet di §4.4. **Uscite.** Tabelle `watermarked/`, `detection/`, `thresholds/`, `metrics/` dei due metodi; `docs/milestone_logs/P2_dev.txt` con `scripts/report_metrics.py` (estendere lo script ai due metodi se filtra per nome) e `scripts/report_capacity.py` (§5.6, anticipato da P3 a P2 nella sola versione da riga di comando).
 
 **Criteri di accettazione.**
 - `pytest tests/unit tests/contract -m "not gpu"` verde, compresi i test di retrocompatibilità di §5 (metriche identiche a prima su tabelle di MCGMark/ACW/STONE sintetiche e su una cella reale già calcolata, confronto con `metrics/metrics.parquet` esistente a tolleranza 1e-9).
 - `mypy --strict`, `ruff`, `pre-commit` puliti.
-- Su L1 dev: `multimark` senza attacchi ha `message_accuracy` (decodifica aperta) ≥ 0,99 sui campioni con `n_sites ≥ 32` e TPR@1%FPR (punteggio principale, confronto `N_reg = 1`) ≥ 0,90 sui campioni con `n_sites ≥ 13` (valore della tabella di §3.10.3 per `N_reg = 1`, f = 0). Se non è così, c'è un bug: fermarsi.
-- `mcss` senza attacchi ha `message_accuracy` = 1,00 sui campioni con `n_sites ≥ 32` (Tabella 4 del paper, p. 8: 100% no-attack).
+- **[v1.2]** Criteri funzionali (su L1 dev nessun campione ha ≥ 32 siti e lo 0% ne ha ≥ 13: i criteri si misurano dove i siti ci sono):
+  (a) `mcss` senza attacchi: `message_accuracy` = 1,00 sui file CodeNet della selezione di §4.4 (fascia 32–39 bit; Tabella 4 del paper, p. 8: 100% no-attack), eseguiti con `scripts/mcss_paper_attacks.py --attack none`; `multimark` sugli stessi file: `message_accuracy` ≥ 0,99 sui file con `n_sites ≥ 32`.
+  (b) `multimark` senza attacchi su **L2 dev e ClassEval** (fase `watermark`+`detect` lanciata anche su L2 dev in P2, non più solo in P4): TPR@1%FPR con soglia provvisoria L1+L2 ≥ 0,90 sui campioni con `n_sites ≥ 13` (tabella di §3.10.3, `N_reg = 1`, f = 0) e ≥ 0,70 sui campioni con `8 ≤ n_sites ≤ 12`.
+  (c) su L1 dev si controlla solo che non ci siano errori: `embedding_success_rate` ≥ 0,99 sui campioni con almeno un sito, `FAILED` con motivo `no_sites` sugli altri, `fpr_human` ≤ 0,015.
+  Se (a) o (b) non valgono c'è un bug: fermarsi.
 - ΔPass@1 di `multimark` e `mcss` rispetto alla baseline ≤ 3 pp su L1 dev (vincolo dell'HPO); se maggiore, i siti responsabili si individuano con `scripts/debug_posthoc_failures.py` (benchmark, da scrivere: per ogni campione `PASSED` prima e `FAILED` dopo, il diff e i canali toccati) e il canale si corregge o si esclude, registrandolo nell'audit.
 - `fpr_human` e `fpr_llm` ≤ 0,015 su L1 dev per i punteggi principale e secondari.
 
@@ -295,6 +309,22 @@ Ogni canale definisce: il **sito** (nodo `ast` radice), la **forma 0** e la **fo
 | 7 | `empty_coll` | `List([])` o `Call(Name list, [])`; `Dict({})` o `Call(Name dict, [])` | letterale `[]`, `{}` | `list()`, `dict()` | `list`/`dict` non ridefiniti nel modulo o nella funzione (nessun binding con quel nome). |
 | 8 | `none_check` | `Compare(x, [Eq\|NotEq\|Is\|IsNot], [Constant None])` | `x is None` / `x is not None` | `x == None` / `x != None` | `x` puro. (Forma 0 = PEP 8; la forma 1 è una violazione E711: visibile, come in MCSS. Resta per fedeltà; esclusione valutata in §7 punto D.) |
 
+#### 3.3.1b **[v1.2]** Canali nuovi 9–14 (solo `multimark`, `channels=extended`; `mcss` usa 1–8)
+
+Scelti da `P0_candidates.txt` con tre filtri, nell'ordine: (1) le due forme hanno **lo stesso comportamento per qualunque tipo** degli operandi, oppure una guardia sintattica lo garantisce; (2) le due forme sono distinguibili sull'`ast`; (3) frequenza utile sul codice corto (`no_overlap` ≥ 25 su L1 oppure forma 0 presente in ≥ 10% dei campioni L2/ClassEval). Numerazione per frequenza decrescente su L1; la regola «vince il canale con numero minore» di §3.3.2 fa sì che i canali di MCSS prevalgano sempre sui nuovi.
+
+| # | Canale | Sito (nodo) | Forma 0 | Forma 1 | Condizioni |
+|---|---|---|---|---|---|
+| 9 | `range_zero` | `Call(Name range, args)` con `len(args) ∈ {1, 2}`, nessun keyword | `range(0, n)` | `range(n)` | forma 0 solo se `args[0]` è `Constant` intero 0; con 2 argomenti e `args[0]` diverso da 0 il nodo **non** è un sito; `range` non ridefinito nel modulo né nella funzione. `range(0, n, s)` (3 argomenti) non è un sito. |
+| 10 | `slice_lower` | `Subscript(value, Slice(lower, upper, step=None))` | `a[0:n]`, `a[0:]` | `a[:n]`, `a[:]` | forma 0 se `lower` è `Constant` intero 0, forma 1 se `lower` è `None`; altrimenti non è un sito. `upper` qualsiasi (resta com'è). La variante `a[i:len(a)]` ↔ `a[i:]` **non** si usa (frequenza 0–6 nell'inventario). |
+| 11 | `else_return` | `If` senza `elif` | `if c: …; return X` / `else: Y…` | `if c: …; return X` seguito da `Y…` nello stesso blocco | il corpo dell'`if` termina con `Return`, `Raise`, `Continue` o `Break`; forma 0: `orelse` non vuoto e `orelse[0]` **non** è un `If` (esclude `elif` e `else: if`); forma 1: `orelse` vuoto, l'`If` **non** è l'ultima istruzione del blocco e l'istruzione successiva **non** è un `If`. Scrittura 0→1: le istruzioni di `orelse` seguono l'`if` nello stesso blocco; 1→0: tutte le istruzioni successive nel blocco entrano in `else`. Il nodo `If` è lo stesso in entrambe le forme (rango invariato); le istruzioni spostate conservano l'ordine di visita. |
+| 12 | `nested_if` | `If` senza `orelse` | `if a: if b: corpo` | `if a and b: corpo` | forma 0: il corpo è **un solo** `If` senza `orelse`, il cui corpo **non** è a sua volta un solo `If` (catene di tre o più `if` non sono siti); forma 1: `test` è `BoolOp(And)` e il corpo **non** è un solo `If`. In entrambe le forme l'`If` del sito **non** è l'unica istruzione del corpo di un altro `If` senza `orelse`. Scrittura 0→1: `test = BoolOp(And, flatten(a) + flatten(b))`; 1→0: primo operando fuori, gli altri nell'`if` interno (`if v0: if v1 and … : corpo`). Il cortocircuito di `and` rende le due forme identiche per qualunque tipo. |
+| 13 | `square` | `BinOp(Mult, x, x)` oppure `BinOp(Pow, x, Constant 2)` | `x * x` | `x ** 2` | `x` è `Name` o `Attribute` (puro, valutato una volta sola); le due occorrenze di `x` hanno lo stesso `ast.dump`; il `BinOp` non è figlio di un altro `BinOp(Mult)` (evita `a * x * x`). Caso limite da testare: `float` (`pow(x, 2.0)` e `x*x` coincidono in CPython su glibc; si misura e si riporta). |
+| 14 | `return_none` | `Return` | `return None` | `return` | `value` è `Constant None` (forma 0) o `None` (forma 1); nessuna condizione. |
+| 15 | `str_method` (**facoltativo**, fuori dalla base finché la decisione P di §7 è aperta) | `Call(Attribute(recv, m), args)` con `m` metodo di `str` | `recv.m(args)` | `str.m(recv, args)` | guardia sul tipo: `recv` è `Constant` stringa, `JoinedStr`, o `Call` a `input`/`str`/`repr`/`format` non ridefiniti; `str` non ridefinito. Forma 1 mai osservata nell'inventario: visibilità alta, si decide con i classificatori di impercettibilità. |
+
+Esclusi e perché (da riportare in T4.2): `range_len` (`enumerate` su iterabili non indicizzabili, e introduce un nome nuovo che interferisce con il canale dei nomi); `not_eq` (`__ne__` può non essere la negazione di `__eq__`; stesso nodo di `equality_dir`); `len_test`, `empty_str`, `bool_cmp` (verità ≠ confronto per tipi diversi da contenitori/bool); `bool_return` (il tipo di ritorno cambia se `c` non è `bool`); `elif` (stesso `ast`); `or_eq` (`in` usa l'identità prima dell'uguaglianza: `nan`); `identity_comp` (crea o distrugge siti di `list_comp`; stile sconsigliato); `sorted_rev` (ordine degli elementi uguali diverso: stabilità); `max_ternary` (pareggi e `NaN`); `str_build`, `while_break`, `const_pow`, `get_none` (frequenza nulla o scrittura non deterministica).
+
 **2D, indipendenza dai nomi:** nei canali 2, 3, 6 la forma canonica dipende solo da `kind`, mai dal testo dei nomi. Se `kind(sx) = kind(dx)` il nodo **non è un sito**. Questo è una deviazione da MCSS (p. 5: «commutative operands are sorted by type, and equality operands are ordered by complexity», con pareggi non specificati); in `mcss` si usa invece la regola di §4.2.
 
 #### 3.3.2 Controlli per ammettere un canale (anche quelli futuri)
@@ -343,9 +373,11 @@ mask(s)        = prf_bit(K, "mask", name(f), str(n_params(f)), c, str(rank(s))) 
 
 #### 3.6.1 Quali variabili sono siti (regola comune a V1, V1b, V2)
 
-Un sito è un nome `n` che, nella funzione `f`: (a) ha almeno un binding come variabile locale (`Assign`, `AugAssign`, `AnnAssign`, target di `For`, `With ... as`, `comprehension` **esclusa**, `NamedExpr`); (b) non è parametro di `f` (default: `names.include_params=false`; vedi §7 punto C); (c) `len(n) ≥ 2` e `n` non è `_` né inizia per `_`; (d) non è dichiarato `global`/`nonlocal`; (e) non compare come argomento con nome in una chiamata (`g(n=…)`) né come attributo (`.n`); (f) `f` non usa `locals`, `vars`, `eval`, `exec`; (g) `n` non è `self`, `cls`. Fuori dalle funzioni (`MODULE`) non ci sono siti dei nomi.
+Un sito è un nome `n` che, nella funzione `f`: (a) ha almeno un binding come variabile locale (`Assign`, `AugAssign`, `AnnAssign`, target di `For`, `With ... as`, `comprehension` **esclusa**, `NamedExpr`); (b) non è parametro di `f` (`names.include_params=false` per `multimark`, decisione C chiusa il 13 novembre: esclusi; `true` per `mcss`); (c) `len(n) ≥ 2` e `n` non è `_` né inizia per `_`; (d) non è dichiarato `global`/`nonlocal`; (e) non compare come argomento con nome in una chiamata (`g(n=…)`) né come attributo (`.n`); (f) `f` non usa `locals`, `vars`, `eval`, `exec`; (g) `n` non è `self`, `cls`.
 
-Stessa definizione usata da T1.4 del benchmark (`attacks/t1/rename.py`), così gli attacchi e il metodo parlano delle stesse variabili.
+**[v1.2] Variabili di modulo (`names.module_level`).** Con `names.module_level=true` anche i nomi legati a livello di modulo (`f = MODULE`, `fid = ("", 0)`) sono siti, con le stesse regole (c)–(g) più: (h) `n` non compare in alcuna istruzione `global` del modulo, non è in `__all__`, non è il nome di una funzione, classe o `import`; (i) il modulo non usa `locals`, `vars`, `eval`, `exec`, `globals` a livello di modulo. La rinomina copre tutte le occorrenze nello scope del modulo e le letture dentro le funzioni (LibCST `ScopeProvider`). Valore: `true` per `mcss` (il paper parla di «each multi-word variable» senza limitarsi alle funzioni, p. 5, e la Tabella 3 non è spiegabile altrimenti su CodeNet, §P0 esito); per `multimark` si decide con l'inventario di P1 passo 0 (decisione O di §7); fino ad allora `false`.
+
+T1.4 del benchmark (`attacks/t1/rename.py`) rinomina un insieme **più ampio** (anche parametri e nomi di una lettera): i siti dei nomi sono un sottoinsieme dei suoi candidati, quindi T1.4 con `r = 1,0` li colpisce tutti. T1.6 (§5.5) usa invece esattamente la regola di questa sezione. Da verificare nel benchmark (P2): se T1.4 tocca anche i nomi di modulo.
 
 #### 3.6.2 Normalizzazione del nome
 
@@ -476,6 +508,8 @@ def detect(code, m_expected, K, cfg, registry_sizes=(1, 16, 1024)):
 | `names.variant` | `V0`, `V1`, `V1b`, `V2`, `V2b` | `V2` | `V1` |
 | `names.proposer` | `static`, `neural` | `neural` (P3; `static` fino a P2) | — |
 | `names.include_params` | bool | `false` | `true` (non specificato dal paper: §4.2 punto 8) |
+| `channels` **[v1.2]** | `mcss8`, `extended`, `extended+str` | `extended` | `mcss8` |
+| `names.module_level` **[v1.2]** | bool | decisione O (§7); `false` fino ad allora | `true` |
 | `voting` | `simple`, `weighted`, `weighted_erasure` | `simple` | `simple` |
 | `channel_weights` | file JSON (solo `weighted*`) | — | — |
 
@@ -512,8 +546,8 @@ Stili: `snake_case` (00) tutte minuscole con `_`; `camelCase` (01) prima parola 
 ### 4.4 Test di autovalidazione (al posto dell'oracle)
 
 1. Round trip su 500 frammenti sintetici × 100 chiavi (P1).
-2. Riproduzione della **Tabella 3** (p. 8) in forma di distribuzione: su 250 file CodeNet Python della fascia 32–39 bit (selezionati con il nostro inventario fra le sottomissioni umane di L2 **non** usate come negativi di test: `TODO(ivan)` conferma la fonte), media di variabili e siti strutturali confrontata con 11,9 e 10,9: si accetta se entro ±30% (le condizioni semantiche riducono i siti; lo scostamento si riporta).
-3. Riproduzione dell'**andamento della Tabella 5** (p. 8) con `t = 2` sugli stessi 250 file: no-attack 100%; `rename 2` e `rename 4` ≥ 95%; `rename 8` < 10%; fra gli attacchi per canale `operand_order` è il **peggiore** e `none_check` il **migliore**; `rename 16` ≈ 0. Gli attacchi si realizzano con `scripts/mcss_paper_attacks.py` (benchmark) (rinomina casuale di r variabili; inversione di tutti i siti di un canale). Si accettano gli ordinamenti, non i valori esatti.
+2. **[v1.2]** Riproduzione della **Tabella 3** (p. 8) in forma di distribuzione: selezione dei file CodeNet Python della fascia 32–39 bit (`n_bits_v1`, profilo `mcss` con `names.module_level=true`, `include_params=true`) dal pool L2, **escludendo** i file con ruolo di test (canoniche o negativi di test) e tenendo al più una sottomissione per problema quando ce ne sono abbastanza; fino a 250 file, minimo utile 100. Se dopo la rilettura con le variabili di modulo i file in fascia sono meno di 100: si allarga a `n_bits_v1 ≥ 32` e, se ancora meno di 100, Ivan chiede alla sessione del benchmark da dove viene il pool (`L2_codenet_pool.jsonl.manifest.json`) e se si possono aggiungere altre sottomissioni Python di CodeNet dei soli problemi di sviluppo. **Criterio di accettazione: media di `n_bits_v1` entro ±10% di 34,6**; le medie di variabili e siti strutturali si **riportano** con lo scostamento da 11,9 e 10,9 ma non sono un criterio, perché dentro una fascia definita sui bit le due componenti si compensano (esito di P0: 7,5 e 18,0 con totale 33,0). Il primo tentativo (18 file, senza variabili di modulo) resta in `P0_mcss_selftest.txt` e nella tesi come risultato intermedio.
+3. Riproduzione dell'**andamento della Tabella 5** (p. 8) con `t = 2` sugli stessi file (con meno di 100 file le percentuali si riportano con l'intervallo di Wilson e si accettano solo gli ordinamenti): no-attack 100%; `rename 2` e `rename 4` ≥ 95%; `rename 8` < 10%; fra gli attacchi per canale `operand_order` è il **peggiore** e `none_check` il **migliore**; `rename 16` ≈ 0. Gli attacchi si realizzano con `scripts/mcss_paper_attacks.py` (benchmark) (rinomina casuale di r variabili; inversione di tutti i siti di un canale). Si accettano gli ordinamenti, non i valori esatti.
 4. Riproduzione della **Tabella 15** (p. 14): inversione casuale del 10% dei siti sulla fascia 32–39 bit dà recupero < 20% (paper: 9,8%).
 5. Confronto con il codice ufficiale, se esce (§P4.3): pool, ordine, valori, messaggi su 50 file; ogni differenza nell'audit.
 
@@ -570,6 +604,10 @@ Per ogni attacco e canale: fra i siti presenti sia nella rilevazione pulita sia 
 
 `configs/config.yaml` (`methods_catalog`), `chains.py` (voci dei due metodi), `scripts/check_test.py`, `check_attacks.py`, `report_metrics.py`, `estimate_closing_cost.py`: estensione ai due metodi senza cambiare i casi esistenti; test: `scripts/*.py` esistenti producono lo stesso output su una fixture.
 
+### 5.10 **[v1.2]** Rilevazione aggregata su k campioni — `scripts/report_aggregated.py` (nessuna modifica alle parti comuni)
+
+Risposta al codice corto: se un campione da 2 siti non basta, quanti campioni dello stesso modello servono? Per `mcss` e `multimark` il punteggio è una funzione di `(agreement A, n_votes N)` salvati in `extra` (§3.10.4), quindi si **somma** su k campioni senza rilanciare nulla: `score_k = -log10 P[Bin(ΣN, 1/2) ≥ ΣA]`. Procedura, solo da tabelle `detection` già calcolate: per `k ∈ {1, 2, 4, 8, 16}`, 1.000 gruppi casuali di k campioni (seme fisso `derive_seed(global_seed, "aggregate", metodo, livello, str(k))`) estratti (a) dai positivi del livello (stesso modello, stesso messaggio: nel benchmark il messaggio dipende dal campione — §3.7 — quindi l'aggregazione si fa **con il registro** `N_reg = 1` sul messaggio atteso di ciascun campione, cioè si sommano le concordanze con il proprio messaggio atteso; per `mcss` vale lo stesso), (b) dai negativi umani di sviluppo per la soglia all'1% su gruppi di k (calibrazione separata per k, sempre su dev), (c) dai negativi umani di **test** per l'FPR. Uscita: `tables/aggregated_<livello>.csv` con `k`, TPR@1%FPR, FPR test, Wilson; anche sulle celle attaccate (T1.4 r = 1,0, T2.1 all). Figura F5.5: TPR contro k, `multimark` e `mcss`, L1 e L2. Per MCGMark non si calcola (il suo punteggio non è additivo per campione): si dichiara. Nessun ADR perché non tocca `src/bench`; lo script va in `scripts/` del benchmark con i suoi test su tabelle sintetiche. Si scrive in P4 (dopo i primi `detection` di L1+L2 dev), si usa su test in P6.
+
 ---
 
 ## 6. Piano degli esperimenti
@@ -593,6 +631,9 @@ Siti per canale, per funzione e per campione su L1 dev (canoniche, baseline Qwen
 | Forme canoniche | `paper` (base `kind`) | T1.4, flip rate dei canali 2, 3, 6 |
 | Codice | t = 0 (B = 24), t = 4 | `message_accuracy` e TPR per fascia di siti |
 | Voto | `weighted`, `weighted_erasure` con pesi dalla flip rate di dev | T2.1 (b = all), T1.5 |
+| **[v1.2]** Canali | `mcss8` (base `extended`); `extended+str` solo se la decisione P lo ammette | siti per campione per fascia, TPR per fascia, ΔPass@1, `adversarial_logreg` |
+| **[v1.2]** Parametri nei nomi | `names.include_params=true` (base `false`) | siti dei nomi guadagnati, ΔPass@1 (atteso: fallimenti dei test che chiamano con argomenti nominati), TPR sotto T1.4 |
+| **[v1.2]** Variabili di modulo | il valore opposto a quello della base (decisione O) | siti dei nomi su L2, ΔPass@1 su L2 e ClassEval |
 
 Attacchi di sviluppo per le ablazioni (tutti CPU): T1.1, T1.4 (r ∈ {0,5; 1,0} × natural), T1.5 (k = 5), T1.6, T2.1 (b = all), T2.4k (k = 1, 3; solo L2 dev multi-funzione), T2.5 (2, around), T4.1 (rename = true). Niente T2.2 su dev (GPU).
 
@@ -615,7 +656,7 @@ La scelta aggiorna `configs/hpo/multimark.yaml` (un solo punto) e `configs/metho
 
 **Capitolo 4 (metodo).**
 - T4.1 Inventario dei siti per canale e dataset (media, mediana, frazione ≥ 13/20/32).
-- T4.2 Gli otto canali con forme, condizioni e deviazioni da MCSS.
+- T4.2 I 14 canali con forme, condizioni e deviazioni da MCSS; i candidati esclusi e il motivo (§3.3.1b).
 - T4.3 Fedeltà della reimplementazione `mcss` (round trip, Tabelle 3/5/15 del paper riprodotte in andamento).
 - T4.4 Siti minimi analitici per `N_reg` e frazione di alterazione (tabella di §3.10.3).
 - F4.1 Schema inserimento/rilevazione con mascheramento e legame per funzione.
@@ -631,7 +672,7 @@ La scelta aggiorna `configs/hpo/multimark.yaml` (un solo punto) e `configs/metho
 - T5.6 FPR per identificativo peggiore (`mcss` contro `multimark`).
 - T5.7 Flip rate per canale e attacco.
 - T5.8 Impercettibilità (CodeBLEU, ΔNLL, AUROC dei due classificatori) e T5.9 efficienza (secondi per campione, CPU).
-- F5.2 ROC su L1 test; F5.3 TPR contro intensità per T1.4 e T2.5; F5.4 curva in k (T2.4k) su ClassEval.
+- F5.2 ROC su L1 test; F5.3 TPR contro intensità per T1.4 e T2.5; F5.4 curva in k (T2.4k) su ClassEval; **[v1.2]** F5.5 rilevazione aggregata: TPR contro numero di campioni k (§5.10), L1 e L2 test, `multimark` e `mcss`.
 
 ---
 
@@ -641,7 +682,7 @@ La scelta aggiorna `configs/hpo/multimark.yaml` (un solo punto) e `configs/metho
 |---|---|---|---|---|---|
 | A | Limite di AUROC per l'ammissibilità delle varianti dei nomi | relativo V0 + 0,10; assoluto (es. 0,80); nessun limite | relativo V0 + 0,10 | prima di P5.3 | **sì** |
 | B | Modalità «confronto con il registro» come punteggio principale | sì; solo decodifica | sì (coincide con il trattamento di MCGMark) | prima di P2 | sì (una frase) |
-| C | Parametri nel canale dei nomi di `multimark` | esclusi; inclusi | esclusi; si misura su L1 dev la capacità persa (`inventory_sites.py --include-params`) e se supera il 30% dei siti dei nomi si riapre | P0 → P2 | no |
+| C | Parametri nel canale dei nomi di `multimark` | esclusi; inclusi | **chiusa il 13 novembre: esclusi** (cambiano la firma della funzione e rompono i test di chi chiama con argomenti nominati). Nel pool CodeNet i parametri valgono il 31% dei siti dei nomi: la perdita si dichiara nella tesi; `names.include_params=true` è un punto dell'ablazione (§6.3) | chiusa | no |
 | D | Canale `none_check` nella base | tenere; escludere | tenere (fedeltà a MCSS); si decide dopo l'ablazione se `adversarial_logreg` lo usa (feature dei nodi `Compare`/`Is`) | P5 | no |
 | E | Griglia `t` di `mcss` | {2}; {2, 4, 8} | {2} (D32 è la fascia che conta; il paper usa t = 8 solo da D56) | P2 | no |
 | F | Perimetro degli attacchi nuovi | solo i miei; tutti i Python; tutti | tutti i Python | prima di P3 | no (Simone) |
@@ -649,12 +690,15 @@ La scelta aggiorna `configs/hpo/multimark.yaml` (un solo punto) e `configs/metho
 | H | Attacco rinomina della funzione (T1.7) | fare; non fare | solo in P7 | fine P6 | no |
 | I | Dipendenza da N della permutazione di `mcss` | flusso in ordine (indipendente da N nei primi cicli); altro | flusso in ordine | P1; riverificare con il codice ufficiale | no |
 | J | Modello dei nomi | Qwen2.5-Coder-0.5B; 1.5B; statico | 0.5B se nella cache del cluster; altrimenti il più piccolo disponibile; statico come ripiego | P3 | no |
-| K | Fonte dei 250 file CodeNet per l'autovalidazione di `mcss` | sottomissioni L2 dev; file esclusi dalla selezione | sottomissioni umane L2 dev non usate come negativi di test | P2 | no |
+| K | Fonte dei file CodeNet per l'autovalidazione di `mcss` | pool L2 (sviluppo e non selezionati, mai test); altre sottomissioni CodeNet dei problemi di sviluppo | pool L2 rifiltrato con `names.module_level=true` (§4.4 punto 2); se < 100 file in fascia 32–39 bit, prima si allarga a ≥ 32, poi si chiede al benchmark la fonte del pool | P1 passo 0 → P2 | no |
 | L | Regola di `message_accuracy` quando la decodifica è ambigua | 0 bit; bit decisi dal voto | bit decisi dal voto (credito parziale, conteggio onesto) | P1 | no |
 | M | Soglia di rilascio dell'ambiente: torch nel worker CPU | sì sempre; solo per `neural` | sì (un solo ambiente) | P0 | no |
 | N | Dimostratore | CLI sola; CLI + web | CLI sola (`multimark/cli/demo.py` nel repository `multimark`: marca, verifica, mostra siti e p-value); web solo se avanza tempo | P7 | no |
+| O **[v1.2]** | Variabili di modulo nel canale dei nomi di `multimark` (`names.module_level`) | `true`; `false` | si decide con `P1_inventory_modlevel.txt`: `true` se su L2 dev i siti dei nomi per campione almeno raddoppiano **e** ΔPass@1 su L2 dev e ClassEval resta ≤ 3 pp in P2 (misurato con entrambi i valori, due `config_hash`); altrimenti `false`. Per `mcss` è `true` in ogni caso (fedeltà, §3.6.1) | P1 passo 0 → fine P2 | no |
+| P **[v1.2]** | Canale 15 `str_method` con guardia sul tipo | nella base; solo ablazione; escluso | **solo ablazione** (`channels=extended+str`) finché non si misura: entra nella base solo se su L1 dev `adversarial_logreg` non peggiora di più di 0,05 di AUROC rispetto a `extended` e la frequenza con guardia (da `P1_candidates_modlevel.txt`, forma `g.f0_guarded`) supera 0,3 siti per campione su L2 | P1 passo 0 → P5 | no |
+| Q **[v1.2]** | Rilevazione aggregata (§5.10) come risultato della tesi | sì (F5.5); no | sì: è la risposta misurabile al codice corto di L1; si chiede al prof se vuole anche una soglia unica per tutti i k | P4 | **sì** (una frase) |
 
-Regola: dove una decisione dipende da un numero non ancora misurato (C, D, G), si misura nella fase indicata e si decide entro il punto di controllo settimanale successivo.
+Regola: dove una decisione dipende da un numero non ancora misurato (D, G, O, P), si misura nella fase indicata e si decide entro il punto di controllo settimanale successivo.
 
 ---
 
@@ -662,8 +706,8 @@ Regola: dove una decisione dipende da un numero non ancora misurato (C, D, G), s
 
 | Settimana | Date | Fasi | Punto di controllo (venerdì) |
 |---|---|---|---|
-| S1 | 12–16 nov | P0 | ambiente creato; `P0_inventory.txt`; decisione C avviata |
-| S2 | 17–23 nov | P1 | round trip 100%; invarianza alla formattazione; `P1_selftest.txt` |
+| S1 | 12–16 nov | P0 **chiusa il 13 nov** | ambiente creato; `P0_inventory.txt`, `P0_candidates.txt`, `P0_mcss_selftest.txt`; decisione C chiusa |
+| S2 | 14–23 nov | P1 (passo 0 subito; Ivan rilancia inventario e selftest) | round trip 100% su 14 canali; invarianza alla formattazione; `P1_selftest.txt`; decisioni O e P chiuse o rinviate a fine P2 |
 | S3 | 24–30 nov | P2 | due metodi su L1 dev; modifiche comuni con test verdi; audit `mcss` e `multimark`; richiesta a Simone per 5.1–5.5 |
 | S4 | 1–7 dic | P3 | V2 neurale; T1.6, T2.5; figura per siti su L1 dev; autovalidazione `mcss` (Tabelle 3/5/15) |
 | S5 | 8–14 dic | P4 | soglie L1+L2 definitive; FPR peggiore; flip rate; confronto con il codice ufficiale se uscito; domanda A al prof fatta |
