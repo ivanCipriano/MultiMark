@@ -5,8 +5,8 @@ gruppo (``--input ETICHETTA=PERCORSO``, ripetibile). Stampa, per gruppo, per ogn
 occorrenze totali, media per campione, frazione di campioni con almeno un'occorrenza. Poi la stima
 di capacità: classifica dei pattern per frequenza sui gruppi di ``--estimate-groups`` (default:
 tutti, insieme) e, per ciascuno di quei gruppi, la frazione di campioni con ``≥ 8`` e ``≥ 13`` siti
-sommando a ``n_sites_total`` i primi 3, 5 e 8 pattern; due varianti, «prudente» (solo
-``site_forms``) e «tutte le forme».
+sommando a ``n_sites_total`` i primi 3, 5 e 8 pattern, nelle tre varianti di
+``multimark.candidates``: ``prudent``, ``all_forms`` e ``no_overlap`` (senza sovrapposizioni).
 
 Esempio (L1 dev)::
 
@@ -30,6 +30,7 @@ from multimark.candidates import (
     ESTIMATE_KS,
     ESTIMATE_THRESHOLDS,
     PATTERNS,
+    VARIANTS,
     estimate,
     estimate_counters,
     rank_patterns,
@@ -120,13 +121,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         lines.append("")
     pooled = [r for g in est_groups for r in groups[g]]
     lines.append(f"Estimate: ranking on groups {', '.join(est_groups)}; k in {ESTIMATE_KS}; "
-                 "upper bound (overlapping patterns counted twice)")  # fmt: skip
-    for variant, all_forms in (("prudent", False), ("all_forms", True)):
-        ranking = rank_patterns(pooled, all_forms=all_forms)
+                 "prudent/all_forms are upper bounds (overlaps counted twice); "
+                 "no_overlap assigns each node to at most one site")  # fmt: skip
+    for variant in VARIANTS:
+        ranking = rank_patterns(pooled, variant)
         lines.append(f"ranking {variant}: " + ", ".join(f"{n} ({t})" for n, t in ranking))
         result["estimate"][variant] = {"ranking": ranking, "groups": {}}
         for label in est_groups:
-            est = estimate(groups[label], ranking, all_forms=all_forms)
+            est = estimate(groups[label], ranking, variant=variant)
             result["estimate"][variant]["groups"][label] = est
             lines.extend(format_estimate(label, est, variant))
         lines.append("")
