@@ -30,6 +30,10 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# Il codice degli esempi è identico a quello del report (prompt HumanEval con righe lunghe).
+"tests/test_report_p0_examples.py" = ["E501"]
+
 [tool.ruff.lint.pyupgrade]
 # Python 3.9: niente `X | Y` nei tipi valutati a runtime (CLAUDE.md).
 keep-runtime-typing = true
