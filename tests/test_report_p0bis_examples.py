@@ -5,7 +5,7 @@ Se un test fallisce, il riconoscimento dei candidati è cambiato: il report va r
 
 from __future__ import annotations
 
-from multimark.candidates import candidate_hits
+from multimark.candidates import added_sites, candidate_hits, rank_patterns, sample_row
 from multimark.inventory import inventory_code
 
 # Codice identico a quello del report.
@@ -111,6 +111,11 @@ def test_example_2() -> None:
         ("sorted_rev_f0", 19, 11),
     ]
     assert inventory_code(B)["n_sites_total"] == 12
+    row = sample_row(B)
+    prudent = [n for n, _ in rank_patterns([row])]
+    no_overlap = [n for n, _ in rank_patterns([row], "no_overlap")]
+    assert added_sites(row, prudent, "prudent") == 11
+    assert added_sites(row, no_overlap, "no_overlap") == 7
 
 
 def test_example_3() -> None:

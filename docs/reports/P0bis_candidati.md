@@ -14,7 +14,7 @@ sono prodotte dalla libreria (`candidate_hits`) e verificate da
 | b | `range_len` | `for i in range(len(a))` con `a[i]` nel corpo | `for i, x in enumerate(a)` | T38 | f0, f1 |
 | c | `square` | `x * x` (`x` puro) | `x ** 2` | T7 | f0, f1 |
 | d | `not_eq` | `not a == b` | `a != b` | | f0, f1 |
-| e | `len_test` | `len(a) == 0` / `len(a) > 0` | `a` / `not a` in una condizione | | f0 |
+| e | `len_test` | `len(a) == 0` / `len(a) > 0` (anche `!= 0`, `>= 1`) | `a` / `not a` in una condizione | | f0 |
 | f | `slice_bound` | `a[0:n]` / `a[i:len(a)]` | `a[:n]` / `a[i:]` | T2 | f0, f1 |
 | g | `str_method` | `s.split(...)`, `s.join(...)`, `s.strip(...)` ecc. | `str.split(s, ...)` ecc. | T39 | f1 |
 | h | `bool_return` | `if c: return True` / `else: return False` | `return bool(c)` (`return <Compare/BoolOp/not>`) | | f0, f1 |
@@ -34,10 +34,8 @@ sono prodotte dalla libreria (`candidate_hits`) e verificate da
 | v | `max_ternary` | `max(a, b)` | `a if a > b else b` (o `b if a < b else a`) | | f0, f1 |
 | w | `empty_str` | `s == ""` | `not s` / `s` in condizione (= e.f1) (`len(s) == 0`, sottoinsieme di e.f0) | | — |
 
-Nella tabella, «stima prudente» indica le forme che si possono trasformare nell'altra senza
-conoscere i tipi. Sono quelle sommate ai siti attuali nella stima di capacità della CLI; la CLI
-stampa anche la variante «tutte le forme». Le scelte di questa colonna sono nostre: TODO(ivan),
-confermarle.
+In e.f0, `len(a) != 0` e `len(a) >= 1` contano come `len(a) > 0` (decisione di Ivan del 13
+novembre 2026). w.f2 resta il solo `len(s) == 0`.
 
 **Limiti dovuti alla lettura sull'`ast`** (il codice si legge solo con `ast`, senza spazi, a capo
 o commenti):
@@ -47,14 +45,39 @@ o commenti):
   altra forma (`1000`) non si riconosce come forma: non è un canale.
 - **e.f1, p.f1, w.f1**: sono lo stesso contatore (test di verità `a` / `not a` in un `if`,
   `while`, espressione condizionale o `assert`).
-- **u** è già il canale `aug_assign`: lo conto solo per confronto e non entra nella stima.
+- **u** è già il canale `aug_assign`: lo conto solo per confronto.
 
-**Sovrapposizioni.** Alcuni nodi contano per più pattern. Sommare i pattern nella stima dà quindi
-un limite superiore:
-- `range(len(a))` è sia b.f0 sia k.f1;
-- `if c: return True else: return False` è sia a.f0 sia h.f0;
-- `a != b` (d.f1) può essere già un sito `equality_dir`. Anche questa è un'interferenza fra canali
-  da valutare prima di adottare d.
+i, r e u restano nel conteggio solo come nota: sono fuori da **tutte** le stime.
+
+## Stima di capacità: tre varianti
+
+Le scelte di questa sezione sono state confermate da Ivan il 13 novembre 2026. La CLI stampa
+tutte e tre le varianti.
+
+| variante | forme sommate | sovrapposizioni |
+|---|---|---|
+| `prudent` | quelle della colonna «stima prudente»: esclusi e.f1, g.f0, h.f2, p, w (e i, r, u) | contate due volte: limite superiore |
+| `all_forms` | tutte, compresi p e w; esclusi i, r, u e i contatori ripetuti (p.f1, w.f1, w.f2) | contate due volte: limite superiore |
+| `no_overlap` | quelle di `prudent` | **nessuna**: ogni nodo `ast` conta al più per un sito |
+
+**Come funziona `no_overlap`.**
+- Ogni occorrenza «possiede» i nodi che la trasformazione riscriverebbe, come gli insiemi `owned`
+  dei canali. Per esempio b.f0 possiede il `For`, il bersaglio, la chiamata `range(...)` e il
+  `len(...)`; k.f1 possiede la chiamata `range(...)`.
+- Priorità: prima i siti degli otto canali esistenti, poi i pattern in ordine di frequenza
+  decrescente; dentro un pattern, in ordine di visita. Un'occorrenza che tocca un nodo già preso
+  non conta.
+- La frequenza della classifica conta solo le occorrenze che non toccano siti esistenti.
+
+Effetti tipici:
+- `range(len(a))` conta una volta sola (b.f0 o k.f1, secondo la classifica);
+- `if c: return True else: return False` conta una volta (a.f0 o h.f0);
+- `a != 1` è già un sito `equality_dir`, quindi d.f1 non conta;
+- `len(a) > 0` e `len(a) == 0` sono già siti `compare_dir` / `equality_dir`, quindi e.f0 di fatto
+  sparisce.
+
+Su 40 file della libreria standard (prova di funzionamento, non dati della tesi) la frequenza di
+`not_eq` scende da 108 a 32 e quella di `len_test` da 7 a 0.
 
 ---
 
@@ -149,7 +172,13 @@ Siti attuali: `n_sites_total = 12` (6 strutturali, 6 variabili).
 
 **Lettura.**
 - La stima prudente aggiunge fino a 11 siti, ma è un limite superiore: alla riga 6 b.f0 e k.f1
-  sono lo stesso costrutto.
+  sono lo stesso costrutto. La variante `no_overlap` ne aggiunge **7**. Le 4 occorrenze in meno
+  sono:
+  - `len(records) == 0`: è già un sito `equality_dir`;
+  - `[r for r in records]`: la riga `names = [...]` è già un sito `list_comp` in forma
+    comprehension;
+  - `name == "" or name == "-"`: i due confronti sono già siti `equality_dir`;
+  - `range(len(names))`: conta una volta sola fra b.f0 e k.f1.
 - **Non** contano:
   - `if key is not None: if key in name:` (righe 10–11) non è j, perché l'`if` esterno ha un
     `else`;
@@ -235,5 +264,5 @@ python -m multimark.cli.candidates \
 
 La classifica dei pattern si calcola sui gruppi di `--estimate-groups` presi insieme (default:
 tutti). Per ogni gruppo la stima dà la frazione di campioni con `n_sites_total + siti aggiunti`
-`≥ 8` e `≥ 13`: con i siti attuali (`k = 0`) e con i primi 3, 5 e 8 pattern, nelle varianti
-«prudente» e «tutte le forme».
+`≥ 8` e `≥ 13`: con i siti attuali (`k = 0`) e con i primi 3, 5 e 8 pattern, nelle tre varianti
+`prudent`, `all_forms` e `no_overlap`.
