@@ -184,6 +184,7 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
     for _attempt in range(MAX_ATTEMPTS):
         # 2. nomi
         used = identifiers_in(tree)
+        style_used = _StyleNames(index0)
         renames = []
         no_candidate = unwritable_names = 0
         chosen: dict[tuple, str] = {}
@@ -193,13 +194,15 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
             chosen[slot.key] = original
             if slot.key in excluded_names:
                 continue
-            choice = _choose_name(slot, cw, key, cfg, code, index0, used, proposer)
+            pool = used if cfg.names_variant in ("V2", "V2b") else style_used.for_slot(slot)
+            choice = _choose_name(slot, cw, key, cfg, code, index0, pool, proposer)
             if choice.reason == "no_candidate":
                 no_candidate += 1
             elif choice.reason == "unwritable":
                 unwritable_names += 1
             if choice.new is not None:
                 used.add(choice.new)
+                style_used.add(slot, choice.new)
                 renames.append((slot.name, choice.new))
                 chosen[slot.key] = choice.new
         try:
@@ -267,6 +270,7 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
                 n_names_no_candidate=no_candidate,
                 n_names_unwritable=unwritable_names + len(excluded_names),
                 n_names_wrong=_wrong_names(layout2, cw, key, cfg),
+                n_names_unread=sum(1 for s in layout2.names if name_value(s, key, cfg) is None),
             )
             status = "OK" if n_bits >= b else "PARTIAL"
             return EmbedResult(code2, status, None, extra)
@@ -284,14 +288,76 @@ def _original_name(layout: Layout, key: tuple) -> str:
 
 
 def _wrong_names(layout: Layout, cw: list[int], key: int, cfg: Config) -> int:
-    """Variabili il cui valore letto non è quello richiesto (nessun candidato, non scrivibili)."""
+    """Voti sbagliati del canale dei nomi (variabili senza candidato o non scrivibili): con V1 una
+    variabile porta due voti. Le variabili non leggibili non votano e non si contano qui."""
     wrong = 0
     for slot in layout.names:
         value = name_value(slot, key, cfg)
         if value is None:
-            wrong += 1
-        elif cfg.names_variant == "V1":
-            wrong += int(value != 2 * cw[slot.indices[0]] + cw[slot.indices[1]])
+            continue
+        if cfg.names_variant == "V1":
+            wrong += int(value >> 1 != cw[slot.indices[0]]) + int(value & 1 != cw[slot.indices[1]])
         else:
             wrong += int(value != cw[slot.indices[0]])
     return wrong
+
+
+class _StyleNames:
+    """Nomi da evitare nelle rinomine di stile (V1, V1b; MD16).
+
+    Per una variabile di funzione: gli identificatori della stessa unità, i nomi legati nello scope
+    del modulo, gli attributi, gli argomenti con nome e i nomi in ``global``/``nonlocal`` di tutto
+    il modulo (così la variabile rinominata resta un sito, regole (d)–(e) di §3.6.1), più i nomi
+    già scelti nella stessa unità e per il modulo. Per una variabile di modulo: tutti gli
+    identificatori del modulo e tutti i nomi già scelti. Rispetto a «non già usato nel modulo» di
+    §3.6.4 (scritto per i candidati di V2), due funzioni diverse possono dare lo stesso nome nuovo
+    a due loro variabili locali: è quello che fa la rinomina di stile di MCSS."""
+
+    def __init__(self, index: AstIndex) -> None:
+        self.all = identifiers_in(index.tree)
+        self.by_unit: dict[int, set[str]] = {}
+        shared: set[str] = set()
+        for node in index.order:
+            unit = index.unit_of(node)
+            for name in _node_identifiers(node):
+                self.by_unit.setdefault(unit.index, set()).add(name)
+                if unit.is_module:
+                    shared.add(name)
+            if isinstance(node, ast.Attribute):
+                shared.add(node.attr)
+            elif isinstance(node, ast.keyword) and node.arg:
+                shared.add(node.arg)
+            elif isinstance(node, (ast.Global, ast.Nonlocal)):
+                shared.update(node.names)
+        self.shared = shared
+        self.chosen_by_unit: dict[int, set[str]] = {}
+
+    def for_slot(self, slot: Slot) -> set[str]:
+        assert slot.name is not None
+        unit = slot.name.unit
+        module_chosen = self.chosen_by_unit.get(-1, set())
+        if unit.is_module:
+            every = set().union(*self.chosen_by_unit.values()) if self.chosen_by_unit else set()
+            return self.all | every
+        return (
+            self.by_unit.get(unit.index, set())
+            | self.shared
+            | self.chosen_by_unit.get(unit.index, set())
+            | module_chosen
+        )
+
+    def add(self, slot: Slot, name: str) -> None:
+        assert slot.name is not None
+        self.chosen_by_unit.setdefault(slot.name.unit.index, set()).add(name)
+
+
+def _node_identifiers(node: ast.AST) -> list[str]:
+    if isinstance(node, ast.Name):
+        return [node.id]
+    if isinstance(node, ast.arg):
+        return [node.arg]
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return [node.name]
+    if isinstance(node, ast.alias):
+        return [node.asname or node.name.split(".")[0]]
+    return []

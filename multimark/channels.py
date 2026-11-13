@@ -142,6 +142,7 @@ class ReadContext:
         self.index = index
         self.options = options
         self.bound = module_bindings(index.tree)
+        self.pure_calls = frozenset({"list", "dict"} - self.bound)
         # Riferimenti ``Name`` che non sono binding (``Load``, ``Del``) per (unità, nome): servono
         # alla condizione su ``x`` di ``list_comp``.
         self.references: dict[tuple[int, str], list[int]] = {}
@@ -160,6 +161,10 @@ class ReadContext:
     @property
     def guards(self) -> bool:
         return self.options.guards
+
+    def pure(self, expr: ast.AST) -> bool:
+        """Purezza di §3.3.1, con ``list()`` e ``dict()`` (non ridefiniti) contati come puri."""
+        return is_pure(expr, self.pure_calls)
 
 
 def _ids(*nodes: ast.AST) -> frozenset[int]:
@@ -180,7 +185,7 @@ def _aug_condition(op: ast.operator, e: ast.AST, ctx: ReadContext) -> bool:
     if isinstance(op, _AUG_GUARDED_CONST_OPS):
         return is_numeric_constant(e)
     if isinstance(op, _AUG_GUARDED_PURE_OPS):
-        return is_pure(e)
+        return ctx.pure(e)
     return False
 
 
@@ -259,7 +264,7 @@ def _recognize_compare(
         return None
     if channel == "equality_dir" and (_is_none_or_bool(left) or _is_none_or_bool(right)):
         return None
-    if ctx.guards and not (is_pure(left) or is_pure(right)):
+    if ctx.guards and not (ctx.pure(left) or ctx.pure(right)):
         return None
     value = _direction(left, right, ctx)
     if value is None:
@@ -418,7 +423,7 @@ def _ternary_ok(var: str, a: ast.AST, b: ast.AST, ctx: ReadContext) -> bool:
         return False
     if _would_be_aug(var, a, ctx) or _would_be_aug(var, b, ctx):
         return False
-    return not ctx.guards or (is_pure(a) and is_pure(b))
+    return not ctx.guards or (ctx.pure(a) and ctx.pure(b))
 
 
 def recognize_ternary(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
@@ -514,7 +519,7 @@ def recognize_none_check(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
         and is_none(node.comparators[0])
     ):
         return None
-    if ctx.guards and not is_pure(node.left):
+    if ctx.guards and not ctx.pure(node.left):
         return None
     value = 0 if isinstance(node.ops[0], (ast.Is, ast.IsNot)) else 1
     return Match("none_check", node, value, _ids(node))
@@ -588,6 +593,17 @@ def _is_assign_ifexp(stmt: ast.AST) -> bool:
     return isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.IfExp)
 
 
+def _ifish(stmt: ast.AST) -> bool:
+    """Un ``If`` o un'assegnazione con ``IfExp``: le due forme di un sito ``ternary``. Nelle
+    condizioni dei canali 11 e 12 contano allo stesso modo, così cambiare la forma di un ternario
+    non crea né distrugge siti ``else_return``/``nested_if`` (§3.3.2 punto 3, MD15)."""
+    return isinstance(stmt, ast.If) or _is_assign_ifexp(stmt)
+
+
+def _single_ifish(body: list) -> bool:
+    return len(body) == 1 and _ifish(body[0])
+
+
 def _else_return_form1_shape(node: ast.If, body: list, ctx: ReadContext) -> bool:
     """``node`` (senza ``orelse``, corpo ``body``) avrebbe la forma 1 di ``else_return``."""
     if not body or not isinstance(body[-1], _TERMINATORS) or _is_elif_position(node, ctx):
@@ -596,7 +612,7 @@ def _else_return_form1_shape(node: ast.If, body: list, ctx: ReadContext) -> bool
     if where is None:
         return False
     items, i = where
-    if i == len(items) - 1 or isinstance(items[i + 1], ast.If):
+    if i == len(items) - 1 or _ifish(items[i + 1]):
         return False
     moved = items[i + 1 :]
     return not (len(moved) == 1 and _is_assign_ifexp(moved[0]))
@@ -609,6 +625,9 @@ def recognize_else_return(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     Oltre alle condizioni della pipeline (corpo che termina con ``return``/``raise``/``continue``/
     ``break``; forma 0: ``orelse[0]`` non è un ``If``; forma 1: l'``if`` non è l'ultima istruzione e
     la successiva non è un ``If``), per la non interferenza (§3.3.2 punto 3, MD15):
+
+    - «``If``» vale anche per un'assegnazione con ``IfExp`` (``_ifish``): sono le due forme di un
+      ternario, e scriverne una non deve far comparire o sparire il sito;
 
     - forma 0: l'``if`` è l'**ultima** istruzione del suo blocco, così le due scritture sono una
       l'inversa dell'altra (1→0 sposta in ``else`` *tutte* le istruzioni successive) e non nascono
@@ -626,7 +645,7 @@ def recognize_else_return(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
         return None
     items, i = where
     if node.orelse:
-        if isinstance(node.orelse[0], ast.If) or i != len(items) - 1:
+        if _ifish(node.orelse[0]) or i != len(items) - 1:
             return None
         if len(node.orelse) == 1 and _is_assign_ifexp(node.orelse[0]):
             return None
@@ -667,10 +686,14 @@ def recognize_nested_if(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     if _single_if(node.body):
         inner = node.body[0]
         assert isinstance(inner, ast.If)
-        if inner.orelse or _single_if(inner.body):
+        if inner.orelse or _single_ifish(inner.body):
             return None
         body, value, owned = inner.body, 0, _ids(node, inner)
-    elif isinstance(node.test, ast.BoolOp) and isinstance(node.test.op, ast.And):
+    elif (
+        isinstance(node.test, ast.BoolOp)
+        and isinstance(node.test.op, ast.And)
+        and not _single_ifish(node.body)
+    ):
         body, value, owned = node.body, 1, _ids(node, node.test)
     else:
         return None
@@ -691,7 +714,7 @@ def recognize_square(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     if not isinstance(node, ast.BinOp):
         return None
     base = node.left
-    if not isinstance(base, (ast.Name, ast.Attribute)) or not is_pure(base):
+    if not isinstance(base, (ast.Name, ast.Attribute)) or not ctx.pure(base):
         return None
     if isinstance(node.op, ast.Mult) and ast.dump(node.right) == ast.dump(base):
         value = 0

@@ -207,9 +207,27 @@ def kind(expr: ast.AST) -> int:
     return 6
 
 
-def is_pure(expr: ast.AST) -> bool:
-    """«Puro» = non contiene ``Call``, ``Await``, ``Yield``, ``NamedExpr``, comprehension."""
-    return not any(isinstance(n, _IMPURE_TYPES) for n in iter_preorder(expr))
+def is_pure(expr: ast.AST, pure_calls: frozenset[str] = frozenset()) -> bool:
+    """«Puro» = non contiene ``Call``, ``Await``, ``Yield``, ``NamedExpr``, comprehension.
+
+    ``pure_calls``: nomi di funzione le cui chiamate **senza argomenti** contano come pure (i
+    canali passano ``list`` e ``dict`` non ridefiniti: ``list()`` e ``dict()`` sono la forma 1 di
+    ``empty_coll`` e non devono cambiare la purezza dell'espressione che li contiene, MD17)."""
+    for n in iter_preorder(expr):
+        if isinstance(n, ast.Call) and _empty_call_to(n, pure_calls):
+            continue
+        if isinstance(n, _IMPURE_TYPES):
+            return False
+    return True
+
+
+def _empty_call_to(node: ast.Call, names: frozenset[str]) -> bool:
+    return (
+        isinstance(node.func, ast.Name)
+        and node.func.id in names
+        and not node.args
+        and not node.keywords
+    )
 
 
 def is_numeric_constant(expr: ast.AST) -> bool:

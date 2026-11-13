@@ -12,11 +12,12 @@ dependencies = ["libcst"]
 
 [project.optional-dependencies]
 neural = ["torch", "transformers"]
-dev = ["pytest", "hypothesis", "ruff", "mypy<1.16"]
+dev = ["pytest", "hypothesis", "ruff", "mypy<1.16", "black"]
 
 [project.scripts]
 multimark-inventory = "multimark.cli.inventory:main"
 multimark-candidates = "multimark.cli.candidates:main"
+multimark-selftest = "multimark.cli.selftest:main"
 
 [tool.setuptools.packages.find]
 include = ["multimark*"]
