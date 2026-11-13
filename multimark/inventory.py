@@ -2,8 +2,9 @@
 
 Per campione (``inventory_code``):
 
-- ``n_sites_<canale>`` per ciascuno degli 8 canali strutturali;
-- ``n_sites_structural``: somma degli 8 canali;
+- ``n_sites_<canale>`` per ciascuno dei 14 canali strutturali (0 per i canali non attivi:
+  ``channels="mcss8"`` legge solo 1–8, ``"extended"`` 1–14);
+- ``n_sites_structural``: somma dei canali;
 - ``n_vars``: siti del canale dei nomi secondo la regola di §3.6.1;
 - ``n_vars_module``: quanti di ``n_vars`` sono variabili di modulo (0 con ``module_level=False``;
   serve alla decisione O di §7);
@@ -98,13 +99,14 @@ def inventory_code(
     guards: bool = True,
     include_params: bool = False,
     module_level: bool = False,
+    channels: str = "extended",
 ) -> dict[str, Any]:
     """Riga dell'inventario per un campione. ``parse_ok=False`` se ``ast.parse`` fallisce."""
     try:
         index = AstIndex.from_code(code)
     except (SyntaxError, ValueError) as exc:
         return {"parse_ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    ctx = ReadContext(index, ReadOptions(canonical=canonical, guards=guards))
+    ctx = ReadContext(index, ReadOptions(canonical=canonical, guards=guards, channels=channels))
     sites = find_sites(index, ctx=ctx)
     names = name_sites(
         index,

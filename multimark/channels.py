@@ -1,7 +1,7 @@
 """Gli 8 canali strutturali (PIPELINE_metodo.md §3.3, numerazione di MCSS Tabella 2, p. 5).
 
 Per ogni canale: riconoscimento del sito sull'``ast``, lettura del valore (forma 0 o forma 1) e,
-da P1, scrittura con LibCST. In P0 c'è solo il **riconoscimento** (``recognize``).
+scrittura con LibCST (``multimark/rewrite.py``).
 
 | # | canale          | forma 0                         | forma 1                         |
 |---|-----------------|---------------------------------|---------------------------------|
@@ -13,6 +13,16 @@ da P1, scrittura con LibCST. In P0 c'è solo il **riconoscimento** (``recognize`
 | 6 | ``operand_order``| costante numerica a destra     | costante numerica a sinistra    |
 | 7 | ``empty_coll``  | ``[]``, ``{}``                  | ``list()``, ``dict()``          |
 | 8 | ``none_check``  | ``is None`` / ``is not None``   | ``== None`` / ``!= None``       |
+| 9 | ``range_zero``  | ``range(0, n)``                 | ``range(n)``                    |
+| 10| ``slice_lower`` | ``a[0:n]``, ``a[0:]``           | ``a[:n]``, ``a[:]``             |
+| 11| ``else_return`` | ``if c: …return`` + ``else: Y`` | ``if c: …return`` + ``Y`` dopo  |
+| 12| ``nested_if``   | ``if a: if b:``                 | ``if a and b:``                 |
+| 13| ``square``      | ``x * x``                       | ``x ** 2``                      |
+| 14| ``return_none`` | ``return None``                 | ``return``                      |
+
+I canali 9–14 (§3.3.1b [v1.2]) sono solo di ``multimark`` (``channels="extended"``); ``mcss`` usa
+1–8 (``channels="mcss8"``). Per la regola «vince il canale con numero minore» i canali di MCSS
+prevalgono sempre sui nuovi.
 
 **Condizioni.** Le condizioni di §3.3.1 sono applicate quando ``ReadOptions.guards`` è vero
 (default). Con ``guards=False`` (solo per l'inventario, ``--no-guards``, §4.2 punto 6) si tolgono
@@ -68,8 +78,20 @@ CHANNELS: tuple[str, ...] = (
     "operand_order",
     "empty_coll",
     "none_check",
+    "range_zero",
+    "slice_lower",
+    "else_return",
+    "nested_if",
+    "square",
+    "return_none",
 )
 CHANNEL_NUMBER: dict[str, int] = {c: i + 1 for i, c in enumerate(CHANNELS)}
+
+#: Insiemi di canali dell'opzione ``channels`` (§3.11 [v1.2]): ``mcss8`` = 1–8 (MCSS),
+#: ``extended`` = 1–14 (base di ``multimark``). ``extended+str`` (canale 15, decisione P di §7) non
+#: è ancora implementato.
+CHANNEL_SETS: dict[str, tuple[str, ...]] = {"mcss8": CHANNELS[:8], "extended": CHANNELS}
+CHANNEL_SET_NAMES = ("mcss8", "extended", "extended+str")
 
 CANONICAL_MODES = ("kind", "paper")
 
@@ -82,14 +104,25 @@ class ReadOptions:
       è un sito) oppure ``"paper"`` (``mcss``, §4.2 punto 3: a parità di ``kind``, ordine
       lessicografico del testo ``ast.unparse`` dell'operando; testi uguali → nessun sito).
     - ``guards``: condizioni semantiche di §3.3.1 (vedi docstring del modulo).
+    - ``channels``: ``"extended"`` (canali 1–14, base di ``multimark``) o ``"mcss8"`` (1–8).
     """
 
     canonical: str = "kind"
     guards: bool = True
+    channels: str = "extended"
 
     def __post_init__(self) -> None:
         if self.canonical not in CANONICAL_MODES:
             raise ValueError(f"canonical must be one of {CANONICAL_MODES}: {self.canonical!r}")
+        if self.channels not in CHANNEL_SET_NAMES:
+            raise ValueError(f"channels must be one of {CHANNEL_SET_NAMES}: {self.channels!r}")
+        if self.channels not in CHANNEL_SETS:
+            # TODO(ivan): canale 15 (str_method con guardia) solo dopo la decisione P di §7.
+            raise NotImplementedError("channels=extended+str: channel 15 is not implemented yet")
+
+    @property
+    def active(self) -> tuple[str, ...]:
+        return CHANNEL_SETS[self.channels]
 
 
 @dataclass(frozen=True)
@@ -116,6 +149,13 @@ class ReadContext:
             if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Load, ast.Del)):
                 key = (index.unit_of(node).index, node.id)
                 self.references.setdefault(key, []).append(id(node))
+        # Nodi dentro una f-string: non sono mai siti (§3.1, «un nodo dentro una stringa non è
+        # mai un sito»; inoltre le posizioni ``ast`` dentro le f-string non sono affidabili prima
+        # di Python 3.12, e la scrittura ritrova i nodi per posizione).
+        self.in_fstring: set[int] = set()
+        for node in index.order:
+            if isinstance(node, ast.JoinedStr):
+                self.in_fstring.update(id(n) for n in iter_preorder(node))
 
     @property
     def guards(self) -> bool:
@@ -480,6 +520,209 @@ def recognize_none_check(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     return Match("none_check", node, value, _ids(node))
 
 
+# ---------------------------------------------------------------------- 9. range_zero
+
+
+def _int_const(expr: ast.AST, value: int) -> bool:
+    return (
+        isinstance(expr, ast.Constant)
+        and type(expr.value) is int  # non bool
+        and expr.value == value
+    )
+
+
+def recognize_range_zero(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
+    """Canale 9: ``range(0, n)`` (forma 0) o ``range(n)`` (forma 1), §3.3.1b."""
+    if not (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "range"
+        and not node.keywords
+        and 1 <= len(node.args) <= 2
+        and not any(isinstance(a, ast.Starred) for a in node.args)
+    ):
+        return None
+    if ctx.guards and "range" in ctx.bound:
+        return None
+    if len(node.args) == 2:
+        if not _int_const(node.args[0], 0):
+            return None
+        return Match("range_zero", node, 0, _ids(node, node.func, node.args[0]))
+    return Match("range_zero", node, 1, _ids(node, node.func))
+
+
+# ---------------------------------------------------------------------- 10. slice_lower
+
+
+def recognize_slice_lower(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
+    """Canale 10: ``a[0:n]``, ``a[0:]`` (forma 0) o ``a[:n]``, ``a[:]`` (forma 1), §3.3.1b."""
+    if not (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice)):
+        return None
+    sl = node.slice
+    if sl.step is not None:
+        return None
+    if sl.lower is None:
+        return Match("slice_lower", node, 1, _ids(node, sl))
+    if _int_const(sl.lower, 0):
+        return Match("slice_lower", node, 0, _ids(node, sl, sl.lower))
+    return None
+
+
+# ---------------------------------------------------------------------- 11. else_return
+
+_TERMINATORS = (ast.Return, ast.Raise, ast.Continue, ast.Break)
+
+
+def _block_of(stmt: ast.AST, ctx: ReadContext) -> Optional[tuple[list, int]]:
+    """Lista di istruzioni che contiene ``stmt`` e posizione di ``stmt`` in essa."""
+    slot = ctx.index.slot_of(stmt)
+    if slot.parent is None or slot.index is None:
+        return None
+    items = getattr(slot.parent, slot.field)
+    if not isinstance(items, list) or not all(isinstance(x, ast.stmt) for x in items):
+        return None
+    return items, slot.index
+
+
+def _is_assign_ifexp(stmt: ast.AST) -> bool:
+    return isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.IfExp)
+
+
+def _else_return_form1_shape(node: ast.If, body: list, ctx: ReadContext) -> bool:
+    """``node`` (senza ``orelse``, corpo ``body``) avrebbe la forma 1 di ``else_return``."""
+    if not body or not isinstance(body[-1], _TERMINATORS) or _is_elif_position(node, ctx):
+        return False
+    where = _block_of(node, ctx)
+    if where is None:
+        return False
+    items, i = where
+    if i == len(items) - 1 or isinstance(items[i + 1], ast.If):
+        return False
+    moved = items[i + 1 :]
+    return not (len(moved) == 1 and _is_assign_ifexp(moved[0]))
+
+
+def recognize_else_return(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
+    """Canale 11: ``if c: …; return X`` + ``else: Y…`` (forma 0) o + ``Y…`` dopo l'``if`` nello
+    stesso blocco (forma 1), §3.3.1b.
+
+    Oltre alle condizioni della pipeline (corpo che termina con ``return``/``raise``/``continue``/
+    ``break``; forma 0: ``orelse[0]`` non è un ``If``; forma 1: l'``if`` non è l'ultima istruzione e
+    la successiva non è un ``If``), per la non interferenza (§3.3.2 punto 3, MD15):
+
+    - forma 0: l'``if`` è l'**ultima** istruzione del suo blocco, così le due scritture sono una
+      l'inversa dell'altra (1→0 sposta in ``else`` *tutte* le istruzioni successive) e non nascono
+      coppie ``list_comp`` fra la fine dell'``else`` e ciò che segue;
+    - le istruzioni spostate non sono una sola assegnazione con ``IfExp`` (da sola nell'``else``
+      sarebbe in posizione di ``elif`` e il sito ``ternary`` sparirebbe);
+    - l'``if`` non è a sua volta un ``elif``.
+    """
+    if not isinstance(node, ast.If) or _is_elif_position(node, ctx):
+        return None
+    if not node.body or not isinstance(node.body[-1], _TERMINATORS):
+        return None
+    where = _block_of(node, ctx)
+    if where is None:
+        return None
+    items, i = where
+    if node.orelse:
+        if isinstance(node.orelse[0], ast.If) or i != len(items) - 1:
+            return None
+        if len(node.orelse) == 1 and _is_assign_ifexp(node.orelse[0]):
+            return None
+        return Match("else_return", node, 0, _ids(node))
+    if not _else_return_form1_shape(node, node.body, ctx):
+        return None
+    return Match("else_return", node, 1, _ids(node))
+
+
+# ---------------------------------------------------------------------- 12. nested_if
+
+
+def _sole_body_of_if_without_else(stmt: ast.AST, ctx: ReadContext) -> bool:
+    slot = ctx.index.slot_of(stmt)
+    parent = slot.parent
+    return (
+        isinstance(parent, ast.If)
+        and slot.field == "body"
+        and len(parent.body) == 1
+        and not parent.orelse
+    )
+
+
+def _single_if(body: list) -> bool:
+    return len(body) == 1 and isinstance(body[0], ast.If)
+
+
+def recognize_nested_if(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
+    """Canale 12: ``if a: if b: corpo`` (forma 0) o ``if a and b: corpo`` (forma 1), §3.3.1b.
+
+    Per la non interferenza (§3.3.2 punto 3, MD15) il sito si esclude anche quando, nella forma 1,
+    l'``if`` sarebbe un sito ``else_return`` (corpo che termina con ``return`` & co. e istruzioni
+    dopo l'``if``): ``else_return`` (11) vince su ``nested_if`` (12) solo in quella forma."""
+    if not isinstance(node, ast.If) or node.orelse:
+        return None
+    if _sole_body_of_if_without_else(node, ctx):
+        return None
+    if _single_if(node.body):
+        inner = node.body[0]
+        assert isinstance(inner, ast.If)
+        if inner.orelse or _single_if(inner.body):
+            return None
+        body, value, owned = inner.body, 0, _ids(node, inner)
+    elif isinstance(node.test, ast.BoolOp) and isinstance(node.test.op, ast.And):
+        body, value, owned = node.body, 1, _ids(node, node.test)
+    else:
+        return None
+    if _else_return_form1_shape(node, body, ctx):
+        return None
+    return Match("nested_if", node, value, owned)
+
+
+# ---------------------------------------------------------------------- 13. square
+
+
+def recognize_square(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
+    """Canale 13: ``x * x`` (forma 0) o ``x ** 2`` (forma 1), §3.3.1b.
+
+    ``x`` è ``Name`` o ``Attribute`` (puro); il ``BinOp`` non è figlio di un ``BinOp(Mult)``. Per
+    la non interferenza (MD15) non è un sito il valore di ``x = x * x`` / ``x = x ** 2`` (la forma
+    ``**`` sarebbe un sito ``aug_assign``)."""
+    if not isinstance(node, ast.BinOp):
+        return None
+    base = node.left
+    if not isinstance(base, (ast.Name, ast.Attribute)) or not is_pure(base):
+        return None
+    if isinstance(node.op, ast.Mult) and ast.dump(node.right) == ast.dump(base):
+        value = 0
+    elif isinstance(node.op, ast.Pow) and _int_const(node.right, 2):
+        value = 1
+    else:
+        return None
+    parent = ctx.index.parent_of(node)
+    if isinstance(parent, ast.BinOp) and isinstance(parent.op, ast.Mult):
+        return None
+    if isinstance(parent, ast.Assign) and parent.value is node and isinstance(base, ast.Name):
+        target = _single_name_target(parent)
+        if target is not None and target.id == base.id:
+            return None
+    return Match("square", node, value, _ids(node))
+
+
+# ---------------------------------------------------------------------- 14. return_none
+
+
+def recognize_return_none(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
+    """Canale 14: ``return None`` (forma 0) o ``return`` (forma 1), §3.3.1b."""
+    if not isinstance(node, ast.Return):
+        return None
+    if node.value is None:
+        return Match("return_none", node, 1, _ids(node))
+    if is_none(node.value):
+        return Match("return_none", node, 0, _ids(node, node.value))
+    return None
+
+
 # ---------------------------------------------------------------------- tabella
 
 Recognizer = Callable[[ast.AST, ReadContext], Optional[Match]]
@@ -493,13 +736,21 @@ RECOGNIZERS: dict[str, Recognizer] = {
     "operand_order": recognize_operand_order,
     "empty_coll": recognize_empty_coll,
     "none_check": recognize_none_check,
+    "range_zero": recognize_range_zero,
+    "slice_lower": recognize_slice_lower,
+    "else_return": recognize_else_return,
+    "nested_if": recognize_nested_if,
+    "square": recognize_square,
+    "return_none": recognize_return_none,
 }
 
 
 def recognize(node: ast.AST, ctx: ReadContext) -> list[Match]:
-    """Candidati di tutti i canali radicati in ``node``, nell'ordine dei canali."""
+    """Candidati dei canali attivi radicati in ``node``, nell'ordine dei canali."""
+    if id(node) in ctx.in_fstring:
+        return []
     out: list[Match] = []
-    for channel in CHANNELS:
+    for channel in ctx.options.active:
         match = RECOGNIZERS[channel](node, ctx)
         if match is not None:
             out.append(match)

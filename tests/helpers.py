@@ -12,8 +12,11 @@ def src(code: str) -> str:
     return textwrap.dedent(code).lstrip("\n")
 
 
-def read(code: str, canonical: str = "kind", guards: bool = True) -> list[Site]:
-    return find_sites_in_code(src(code), ReadOptions(canonical=canonical, guards=guards))
+def read(
+    code: str, canonical: str = "kind", guards: bool = True, channels: str = "extended"
+) -> list[Site]:
+    options = ReadOptions(canonical=canonical, guards=guards, channels=channels)
+    return find_sites_in_code(src(code), options)
 
 
 def channel_values(code: str, channel: str, **opts: object) -> list[int]:

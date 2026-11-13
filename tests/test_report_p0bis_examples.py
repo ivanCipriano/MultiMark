@@ -89,7 +89,7 @@ def test_example_1() -> None:
         ("empty_str_f1", 14, 7),
         ("return_none_f0", 15, 8),
     ]
-    assert inventory_code(A)["n_sites_total"] == 2
+    assert inventory_code(A, channels="mcss8")["n_sites_total"] == 2
 
 
 def test_example_2() -> None:
@@ -110,7 +110,7 @@ def test_example_2() -> None:
         ("str_build_f2", 18, 12),
         ("sorted_rev_f0", 19, 11),
     ]
-    assert inventory_code(B)["n_sites_total"] == 12
+    assert inventory_code(B, channels="mcss8")["n_sites_total"] == 12
     row = sample_row(B)
     prudent = [n for n, _ in rank_patterns([row])]
     no_overlap = [n for n, _ in rank_patterns([row], "no_overlap")]
@@ -131,4 +131,4 @@ def test_example_3() -> None:
         ("empty_str_f1", 11, 9),
         ("aug_inc_f0", 19, 8),
     ]
-    assert inventory_code(C)["n_sites_total"] == 10
+    assert inventory_code(C, channels="mcss8")["n_sites_total"] == 10

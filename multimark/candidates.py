@@ -555,6 +555,7 @@ def sample_row(code: str) -> dict:
     """Riga per campione: contatori, ``parse_ok``, ``n_sites_total`` dell'inventario e, per la
     variante ``no_overlap``, le occorrenze con i nodi posseduti (``_hits``) e i nodi dei siti
     strutturali (``_site_owned``), come posizioni di visita."""
+    from multimark.channels import ReadOptions
     from multimark.inventory import inventory_code
     from multimark.sites import find_sites
 
@@ -564,9 +565,11 @@ def sample_row(code: str) -> dict:
         return {"parse_ok": False}
     result = scan(index)
     pos = index.position
-    site_owned = frozenset(pos[i] for site in find_sites(index) for i in site.owned)
+    # P0-bis: i candidati si stimano sopra gli otto canali di MCSS (channels="mcss8").
+    sites = find_sites(index, ReadOptions(channels="mcss8"))
+    site_owned = frozenset(pos[i] for site in sites for i in site.owned)
     hits = [(key, frozenset(pos[i] for i in owned)) for key, _, owned in result.hits]
-    inv = inventory_code(code)
+    inv = inventory_code(code, channels="mcss8")
     return {
         "parse_ok": True,
         "n_sites_total": inv["n_sites_total"],

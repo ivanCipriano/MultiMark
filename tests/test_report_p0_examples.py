@@ -14,6 +14,9 @@ from multimark.inventory import inventory_code
 from multimark.names import name_sites
 from multimark.sites import find_sites, find_sites_in_code, loop_form_targets
 
+# Il report di P0 descrive gli otto canali di MCSS: la lettura è fissata a channels="mcss8".
+P0 = ReadOptions(channels="mcss8")
+
 # Codice identico a quello del report (righe numerate lì).
 A = '''from typing import List
 
@@ -97,13 +100,13 @@ def shadow(list):
 def site_texts(code: str, guards: bool = True) -> set:
     return {
         (s.channel, (ast.get_source_segment(code, s.node) or "").split(chr(10))[0].strip())
-        for s in find_sites_in_code(code, ReadOptions(guards=guards))
+        for s in find_sites_in_code(code, ReadOptions(guards=guards, channels="mcss8"))
     }
 
 
 def name_set(code: str, include_params: bool = False) -> set:
     index = AstIndex.from_code(code)
-    targets = loop_form_targets(find_sites(index), index)
+    targets = loop_form_targets(find_sites(index, P0), index)
     return {
         n.name
         for n in name_sites(index, include_params=include_params, excluded_binding_ids=targets)
@@ -112,11 +115,11 @@ def name_set(code: str, include_params: bool = False) -> set:
 
 def test_example_1_short_function() -> None:
     assert site_texts(A) == {("compare_dir", "balance < 0")}
-    assert [s.value for s in find_sites_in_code(A)] == [1]
+    assert [s.value for s in find_sites_in_code(A, P0)] == [1]
     assert name_set(A) == {"balance", "op"}
     assert name_set(A, include_params=True) == {"operations", "balance", "op"}
     assert ("aug_assign", "balance += op") in site_texts(A, guards=False)
-    row = inventory_code(A)
+    row = inventory_code(A, channels="mcss8")
     assert (row["n_sites_total"], row["n_bits_v1"], row["loc"]) == (3, 5, 8)
 
 
@@ -134,7 +137,7 @@ def test_example_2_functions_and_class() -> None:
         ("none_check", "avg is None"),
     }
     # il [] di `scaled = []` appartiene al sito list_comp: un solo empty_coll (riga 4)
-    empties = [s for s in find_sites_in_code(B) if s.channel == "empty_coll"]
+    empties = [s for s in find_sites_in_code(B, P0) if s.channel == "empty_coll"]
     assert [s.lineno for s in empties] == [4]
     assert [u.fid for u in AstIndex.from_code(B).functions] == [
         ("__init__", 2), ("add", 2), ("mean", 1), ("summary", 2),
@@ -143,7 +146,10 @@ def test_example_2_functions_and_class() -> None:
     assert "values" not in name_set(B, include_params=True)
     assert {"value", "digits"} <= name_set(B, include_params=True)
     assert any(t.startswith("spread") for _, t in site_texts(B, guards=False))
-    assert inventory_code(B, canonical="paper", include_params=True)["n_bits_v1"] == 27
+    assert (
+        inventory_code(B, canonical="paper", include_params=True, channels="mcss8")["n_bits_v1"]
+        == 27
+    )
 
 
 def test_example_3_near_sites() -> None:
