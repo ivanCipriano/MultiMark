@@ -18,7 +18,8 @@ comprese le funzioni annidate):
 (f) ``f`` non usa ``locals``, ``vars``, ``eval``, ``exec``;
 (g) ``n`` non è ``self``, ``cls``.
 
-Fuori dalle funzioni (``MODULE``) non ci sono siti dei nomi.
+Fuori dalle funzioni (``MODULE``) i siti dei nomi esistono solo con ``module_level=True``
+(opzione ``names.module_level``, [v1.2]; regole (h)–(i) in ``name_sites``).
 
 Allineamento con T1.4 del benchmark (``attacks/t1/rename.py``, che accetta solo gruppi «fatti di
 nomi e parametri»): un nome che nella funzione ha anche un binding non di variabile (``import``,
@@ -130,12 +131,96 @@ def _param_args(fn: ast.AST) -> list[ast.arg]:
     return out
 
 
+_MODULE_DYNAMIC_SCOPE = _DYNAMIC_SCOPE | {"globals"}
+_SCOPE_TYPES = (*FUNCTION_TYPES, ast.Lambda, ast.ClassDef)
+
+
+def _module_scope_nodes(tree: ast.AST) -> list[ast.AST]:
+    """Nodi dello scope del modulo in ordine di visita: si salta il contenuto di funzioni,
+    ``lambda`` e classi (i corpi di classe sono uno scope a sé: i loro nomi sono attributi)."""
+    out: list[ast.AST] = []
+    stack = [tree]
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        if node is not tree and isinstance(node, _SCOPE_TYPES):
+            continue
+        stack.extend(reversed(list(ast.iter_child_nodes(node))))
+    return out
+
+
+def _dunder_all(tree: ast.Module) -> set[str]:
+    """Nomi elencati in ``__all__`` (assegnazioni e ``+=`` di liste o tuple di stringhe)."""
+    out: set[str] = set()
+    for node in tree.body:
+        targets: list[ast.AST] = []
+        value: Optional[ast.AST] = None
+        if isinstance(node, ast.Assign):
+            targets, value = list(node.targets), node.value
+        elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
+            targets, value = [node.target], node.value
+        if value is None or not any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+            continue
+        if isinstance(value, (ast.List, ast.Tuple)):
+            out.update(
+                e.value
+                for e in value.elts
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)
+            )
+    return out
+
+
+def _uses_dynamic_scope(nodes: Iterable[ast.AST], names: frozenset[str]) -> bool:
+    return any(
+        isinstance(n, ast.Name) and n.id in names and isinstance(n.ctx, ast.Load) for n in nodes
+    )
+
+
+def _first_bindings(
+    nodes: Iterable[ast.AST], index: AstIndex, excluded_binding_ids: frozenset[int]
+) -> tuple[dict[str, tuple[int, int, int]], set[str]]:
+    """Primo binding di variabile per nome (posizione di visita, riga, colonna) e nomi con
+    binding non di variabile."""
+    first: dict[str, tuple[int, int, int]] = {}
+    other: set[str] = set()
+    for node in nodes:
+        other.update(_other_bindings(node))
+        for name in _variable_bindings(node):
+            if id(name) in excluded_binding_ids:
+                continue
+            pos = index.position[id(name)]
+            prev = first.get(name.id)
+            if prev is None or pos < prev[0]:
+                first[name.id] = (pos, name.lineno, name.col_offset)
+    return first, other
+
+
+def _common_rules(n: str, excluded: set[str], other: set[str]) -> bool:
+    """Regole (c), (d), (e), (g) e l'esclusione dei binding non di variabile."""
+    return (
+        len(n) >= 2  # (c)
+        and not n.startswith("_")
+        and n not in _EXCLUDED_NAMES  # (g)
+        and n not in excluded  # (d), (e)
+        and n not in other
+    )
+
+
 def name_sites(
     index: AstIndex,
     include_params: bool = False,
     excluded_binding_ids: frozenset[int] = frozenset(),
+    module_level: bool = False,
 ) -> list[NameSite]:
-    """Siti del canale dei nomi (§3.6.1), per funzione in ordine di visita, poi per rango."""
+    """Siti del canale dei nomi (§3.6.1): funzioni in ordine di visita, poi (con
+    ``module_level=True``) le variabili di modulo; dentro l'unità, per rango.
+
+    Variabili di modulo (``names.module_level``, [v1.2]): nomi legati nello scope del modulo
+    (fuori da funzioni, ``lambda`` e corpi di classe), con le regole (c)–(g) e in più (h) il nome
+    non compare in un'istruzione ``global`` del modulo (già in (d)), non è in ``__all__``, non è il
+    nome di una funzione, classe o ``import`` del modulo; (i) il modulo non usa ``locals``,
+    ``vars``, ``eval``, ``exec``, ``globals`` nel proprio scope. I parametri non riguardano il
+    modulo."""
     excluded = _module_exclusions(index.tree)
     nodes_by_unit: dict[int, list[ast.AST]] = {}
     for node in index.order:
@@ -145,40 +230,50 @@ def name_sites(
     out: list[NameSite] = []
     for unit in index.functions:
         nodes = nodes_by_unit.get(unit.index, [])
-        if any(
-            isinstance(n, ast.Name) and n.id in _DYNAMIC_SCOPE and isinstance(n.ctx, ast.Load)
-            for n in nodes
-        ):
+        if _uses_dynamic_scope(nodes, _DYNAMIC_SCOPE):
             continue  # (f)
         assert unit.node is not None
         params = {a.arg for a in _param_args(unit.node)}
-        first: dict[str, tuple[int, int, int]] = {}  # nome -> (posizione di visita, riga, colonna)
-        other: set[str] = set()
+        first, other = _first_bindings(nodes, index, excluded_binding_ids)
         if include_params:
             for a in _param_args(unit.node):
-                first.setdefault(a.arg, (index.position[id(a)], a.lineno, a.col_offset))
-        for node in nodes:
-            other.update(_other_bindings(node))
-            for name in _variable_bindings(node):
-                if id(name) in excluded_binding_ids:
-                    continue
-                pos = index.position[id(name)]
-                prev = first.get(name.id)
-                if prev is None or pos < prev[0]:
-                    first[name.id] = (pos, name.lineno, name.col_offset)
+                pos = index.position[id(a)]
+                if a.arg not in first or pos < first[a.arg][0]:
+                    first[a.arg] = (pos, a.lineno, a.col_offset)
         chosen = [
             (pos, n, line, col)
             for n, (pos, line, col) in first.items()
-            if len(n) >= 2  # (c)
-            and not n.startswith("_")
-            and n not in _EXCLUDED_NAMES  # (g)
-            and n not in excluded  # (d), (e)
-            and n not in other
-            and (include_params or n not in params)  # (b)
+            if _common_rules(n, excluded, other) and (include_params or n not in params)  # (b)
         ]
         for rank, (_, n, line, col) in enumerate(sorted(chosen)):
             out.append(NameSite(unit, n, rank, line, col))
+    if module_level:
+        out.extend(_module_name_sites(index, excluded, excluded_binding_ids))
     return out
+
+
+def _module_name_sites(
+    index: AstIndex, excluded: set[str], excluded_binding_ids: frozenset[int]
+) -> list[NameSite]:
+    """Variabili di modulo (vedi ``name_sites``)."""
+    tree = index.tree
+    assert isinstance(tree, ast.Module)
+    scope = _module_scope_nodes(tree)
+    if _uses_dynamic_scope(scope, _MODULE_DYNAMIC_SCOPE):
+        return []  # (i)
+    first, _ = _first_bindings(scope, index, excluded_binding_ids)
+    # (h): nomi di funzioni, classi e import in tutto il modulo, e nomi di __all__
+    defined = {name for node in index.order for name in _other_bindings(node)}
+    blocked = defined | _dunder_all(tree)
+    chosen = [
+        (pos, n, line, col)
+        for n, (pos, line, col) in first.items()
+        if _common_rules(n, excluded, set()) and n not in blocked
+    ]
+    unit = index.unit_of(tree)
+    return [
+        NameSite(unit, n, rank, line, col) for rank, (_, n, line, col) in enumerate(sorted(chosen))
+    ]
 
 
 # ---------------------------------------------------------------------- P1 / P3

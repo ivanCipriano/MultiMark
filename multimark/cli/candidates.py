@@ -67,7 +67,7 @@ def _fmt(x: float) -> str:
 def format_group(label: str, summary: dict) -> list:
     lines = [f"== group {label}: samples={summary['n_samples']} parsed={summary['n_parsed']}"]
     lines.append(
-        f"{'':2}{'pattern':<16}{'form':<6}{'total':>8}{'mean':>10}{'frac>=1':>10}  est.  form"
+        f"{'':2}{'pattern':<16}{'form':<12}{'total':>8}{'mean':>10}{'frac>=1':>10}  est.  form"
     )
     for pattern in PATTERNS:
         prudent = estimate_counters(pattern)
@@ -75,7 +75,7 @@ def format_group(label: str, summary: dict) -> list:
             st = summary["counters"][counter]
             mark = "*" if counter in prudent else " "
             lines.append(
-                f"{pattern.letter:<2}{pattern.name:<16}{'f' + str(i):<6}{st['total']:>8}"
+                f"{pattern.letter:<2}{pattern.name:<16}{pattern.form_id(i):<12}{st['total']:>8}"
                 f"{_fmt(st['mean']):>10}{_fmt(st['frac_ge_1']):>10}   {mark}   {pattern.forms[i]}"
             )
     return lines

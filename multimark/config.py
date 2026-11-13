@@ -31,6 +31,8 @@ class Config:
     names_variant: str = "V2"
     names_proposer: str = "static"  # ``neural`` da P3 (§3.11)
     names_include_params: bool = False
+    # [v1.2] variabili di modulo nel canale dei nomi: decisione O di §7, ``false`` fino ad allora
+    names_module_level: bool = False
     voting: str = "simple"
     channel_weights: Optional[str] = None
     registry_seed: Optional[int] = None
@@ -79,4 +81,5 @@ def mcss_profile() -> Config:
         canonical="paper",
         names_variant="V1",
         names_include_params=True,
+        names_module_level=True,
     )

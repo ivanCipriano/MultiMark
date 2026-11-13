@@ -68,6 +68,17 @@ CASES = [
     ("def f(s):\n    return str.split(s, ',')\n", "str_method_f1", 1),
     ("def f(s):\n    return str.split(s, ',')\n", "str_method_f0", 0),
     ("def f(s):\n    return s.encode()\n", "str_method_f0", 0),
+    # g.f0_guarded: ricevitore certamente str (canale 15 di §3.3.1b)
+    ("def f(x):\n    return ','.join(x), f'{x}'.upper(), input().split()\n",
+     "str_method_f0_guarded", 3),
+    ("def f(x):\n    return str(x).strip(), repr(x).lower(), format(x).replace('a', 'b')\n",
+     "str_method_f0_guarded", 3),
+    ("def f(s, x):\n    return s.split(), x.y.strip(), g(x).lower(), b'a'.split()\n",
+     "str_method_f0_guarded", 0),
+    ("def input():\n    pass\ndef f():\n    return input().split()\n",
+     "str_method_f0_guarded", 0),  # input ridefinito
+    ("str = bytes\ndef f():\n    return 'a'.split()\n", "str_method_f0_guarded", 0),
+    ("def f(s):\n    return str.split(s)\n", "str_method_f0_guarded", 0),
     # h. if c: return True else: return False / return bool(c) / return c
     ("def f(c):\n    if c:\n        return True\n    else:\n        return False\n",
      "bool_return_f0", 1),
@@ -166,6 +177,12 @@ def test_every_pattern_and_form_is_tested() -> None:
     assert {p.name for p in PATTERNS} == {c[5:].rsplit("_f", 1)[0] for c in absent}
 
 
+def test_guarded_is_subset_of_f0() -> None:
+    c = counts("def f(s):\n    return 'a'.join(s), s.join('a')\n")
+    assert (c["cand_str_method_f0"], c["cand_str_method_f0_guarded"]) == (2, 1)
+    assert PATTERNS_BY_NAME["str_method"].counter(2) == "cand_str_method_f0_guarded"
+
+
 def test_letters_and_names_are_unique() -> None:
     assert [p.letter for p in PATTERNS] == list("abcdefghijklmnopqrstuvw")
     assert len(PATTERNS_BY_NAME) == len(PATTERNS)
@@ -201,7 +218,15 @@ def test_estimate_counters() -> None:
         assert estimate_counters(PATTERNS_BY_NAME[name], all_forms=True) == ()
     # esclusioni prudenti confermate: e.f1, g.f0, h.f2, p, w
     assert estimate_counters(PATTERNS_BY_NAME["len_test"]) == ("cand_len_test_f0",)
-    assert estimate_counters(PATTERNS_BY_NAME["str_method"]) == ("cand_str_method_f1",)
+    assert estimate_counters(PATTERNS_BY_NAME["str_method"]) == (
+        "cand_str_method_f1",
+        "cand_str_method_f0_guarded",
+    )
+    # in all_forms f0_guarded è dentro f0: non si somma due volte
+    assert estimate_counters(PATTERNS_BY_NAME["str_method"], all_forms=True) == (
+        "cand_str_method_f0",
+        "cand_str_method_f1",
+    )
     assert estimate_counters(PATTERNS_BY_NAME["bool_return"]) == (
         "cand_bool_return_f0",
         "cand_bool_return_f1",

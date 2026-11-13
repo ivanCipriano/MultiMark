@@ -53,6 +53,34 @@ def test_inventory_row() -> None:
     assert row["loc"] == 9
 
 
+def test_inventory_module_level() -> None:
+    code = "total_count = 0\nfor item in range(3):\n    total_count += item\nprint(total_count)\n"
+    off = inventory_code(code)
+    on = inventory_code(code, module_level=True)
+    assert (off["n_vars"], off["n_vars_module"]) == (0, 0)
+    assert (on["n_vars"], on["n_vars_module"]) == (2, 2)
+    assert on["n_bits_v1"] == on["n_sites_structural"] + 4
+    assert on["n_sites_total"] == on["n_sites_structural"] + 2
+
+
+def test_cli_module_level(tmp_path: Path) -> None:
+    inp = tmp_path / "in.jsonl"
+    inp.write_text(json.dumps({"code": "total_count = 1\n"}) + "\n", encoding="utf-8")
+    for flag, expected in (("off", 0), ("on", 1)):
+        out = tmp_path / f"rows_{flag}.jsonl"
+        js = tmp_path / f"s_{flag}.json"
+        args = ["--input", str(inp), "--output", str(out), "--summary-json", str(js),
+                "--module-level", flag]  # fmt: skip
+        assert main(args) == 0
+        row = json.loads(out.read_text(encoding="utf-8").splitlines()[0])
+        assert row["n_vars_module"] == expected
+        assert json.loads(js.read_text(encoding="utf-8"))["options"]["module_level"] is (
+            flag == "on"
+        )
+    with pytest.raises(SystemExit):
+        main(["--input", str(inp), "--module-level", "yes"])
+
+
 def test_inventory_options() -> None:
     code = "def f(alpha, beta):\n    gamma = len(alpha) < len(beta)\n    return alpha < beta\n"
     assert inventory_code(code)["n_sites_compare_dir"] == 0

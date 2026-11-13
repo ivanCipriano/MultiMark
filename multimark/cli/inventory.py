@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--canonical", choices=CANONICAL_MODES, default="kind")
     p.add_argument("--no-guards", action="store_true", help="drop semantic channel conditions")
     p.add_argument("--include-params", action="store_true", help="count parameters as names")
+    p.add_argument(
+        "--module-level",
+        choices=("on", "off"),
+        default="off",
+        help="module-level variables as name sites (names.module_level, default: off)",
+    )
     return p
 
 
@@ -85,6 +91,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             canonical=args.canonical,
             guards=not args.no_guards,
             include_params=args.include_params,
+            module_level=args.module_level == "on",
         )
         if args.id_field:
             row = {args.id_field: obj.get(args.id_field), **row}
@@ -96,11 +103,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "canonical": args.canonical,
         "guards": not args.no_guards,
         "include_params": args.include_params,
+        "module_level": args.module_level == "on",
     }
     text = format_summary(summary, args.label)
     text += (
         f"\noptions: canonical={args.canonical} guards={not args.no_guards} "
-        f"include_params={args.include_params}\n"
+        f"include_params={args.include_params} module_level={args.module_level}\n"
     )
     if args.summary:
         args.summary.parent.mkdir(parents=True, exist_ok=True)

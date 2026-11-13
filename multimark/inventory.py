@@ -5,6 +5,8 @@ Per campione (``inventory_code``):
 - ``n_sites_<canale>`` per ciascuno degli 8 canali strutturali;
 - ``n_sites_structural``: somma degli 8 canali;
 - ``n_vars``: siti del canale dei nomi secondo la regola di §3.6.1;
+- ``n_vars_module``: quanti di ``n_vars`` sono variabili di modulo (0 con ``module_level=False``;
+  serve alla decisione O di §7);
 - ``n_sites_total = n_sites_structural + n_vars`` (un bit per variabile, come la V2 della base:
   è la ``N`` di §3.9 confrontata con ``B = 32``; confermato da Ivan il 13 novembre 2026);
 - ``n_bits_v1 = n_sites_structural + 2·n_vars``: capacità con il canale dei nomi V1 di ``mcss``
@@ -42,6 +44,7 @@ STAT_COLUMNS = (
     "n_sites_total",
     "n_sites_structural",
     "n_vars",
+    "n_vars_module",
     "n_bits_v1",
     *(f"n_sites_{c}" for c in CHANNELS),
     "n_functions",
@@ -94,6 +97,7 @@ def inventory_code(
     canonical: str = "kind",
     guards: bool = True,
     include_params: bool = False,
+    module_level: bool = False,
 ) -> dict[str, Any]:
     """Riga dell'inventario per un campione. ``parse_ok=False`` se ``ast.parse`` fallisce."""
     try:
@@ -103,13 +107,17 @@ def inventory_code(
     ctx = ReadContext(index, ReadOptions(canonical=canonical, guards=guards))
     sites = find_sites(index, ctx=ctx)
     names = name_sites(
-        index, include_params=include_params, excluded_binding_ids=loop_form_targets(sites, index)
+        index,
+        include_params=include_params,
+        excluded_binding_ids=loop_form_targets(sites, index),
+        module_level=module_level,
     )
     counts = count_by_channel(sites)
     row: dict[str, Any] = {"parse_ok": True, "error": None}
     row["n_sites_total"] = len(sites) + len(names)
     row["n_sites_structural"] = len(sites)
     row["n_vars"] = len(names)
+    row["n_vars_module"] = sum(1 for n in names if n.unit.is_module)
     row["n_bits_v1"] = len(sites) + 2 * len(names)
     for channel in CHANNELS:
         row[f"n_sites_{channel}"] = counts[channel]

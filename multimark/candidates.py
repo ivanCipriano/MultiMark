@@ -43,7 +43,13 @@ import ast
 from dataclasses import dataclass
 from typing import Optional
 
-from multimark._astindex import AstIndex, is_numeric_constant, is_pure, iter_preorder
+from multimark._astindex import (
+    AstIndex,
+    is_numeric_constant,
+    is_pure,
+    iter_preorder,
+    module_bindings,
+)
 
 
 @dataclass(frozen=True)
@@ -56,9 +62,14 @@ class Pattern:
     source: str = ""
     site_forms: tuple[int, ...] = ()
     note: str = ""
+    #: identificatori delle forme (default ``f0``, ``f1``, ...); ``g`` ha anche ``f0_guarded``
+    form_ids: tuple[str, ...] = ()
+
+    def form_id(self, form: int) -> str:
+        return self.form_ids[form] if self.form_ids else f"f{form}"
 
     def counter(self, form: int) -> str:
-        return f"cand_{self.name}_f{form}"
+        return f"cand_{self.name}_{self.form_id(form)}"
 
     @property
     def counters(self) -> tuple[str, ...]:
@@ -77,7 +88,11 @@ PATTERNS: tuple[Pattern, ...] = (
             (0,), "semantica da verificare (tipo di a)"),
     Pattern("f", "slice_bound", ("a[0:n] / a[i:len(a)]", "a[:n] / a[i:]"), "T2", (0, 1)),
     Pattern("g", "str_method", ("s.split(...), s.join(...), s.strip(...) ecc.",
-            "str.split(s, ...) ecc."), "T39", (1,), "tipo di s ignoto nella forma 0"),
+            "str.split(s, ...) ecc.",
+            "s.m(...) con s stringa garantita: letterale, f-string, input/str/repr/format(...) "
+            "(sottoinsieme di f0)"),
+            "T39", (1, 2), "tipo di s ignoto nella forma 0 senza guardia",
+            ("f0", "f1", "f0_guarded")),
     Pattern("h", "bool_return", ("if c: return True / else: return False", "return bool(c)",
             "return <Compare|BoolOp|not>"), "", (0, 1)),
     Pattern("i", "elif", ("elif / else: if (stesso ast)",), "T9", (),
@@ -110,6 +125,10 @@ PATTERNS: tuple[Pattern, ...] = (
 
 PATTERNS_BY_NAME = {p.name: p for p in PATTERNS}
 COUNTERS: tuple[str, ...] = tuple(c for p in PATTERNS for c in p.counters)
+
+#: Funzioni il cui risultato è sempre ``str`` (guardia di ``g.f0_guarded``, canale 15 di
+#: §3.3.1b), se non ridefinite nel modulo.
+STR_PRODUCERS = frozenset({"input", "str", "repr", "format"})
 
 #: Metodi di ``str`` contati da ``g`` (T39); elenco confermato da Ivan (13 novembre 2026).
 STR_METHODS = frozenset(
@@ -194,7 +213,8 @@ def _add_chain(e: ast.AST) -> list:
 
 
 class _Counter:
-    def __init__(self) -> None:
+    def __init__(self, bound: frozenset[str] = frozenset()) -> None:
+        self.bound = bound  # nomi con un binding nel modulo (builtin ridefiniti)
         self.counts = {c: 0 for c in COUNTERS}
         # (contatore, nodo, id dei nodi posseduti) in ordine di visita
         self.hits: list[tuple[str, ast.AST, frozenset[int]]] = []
@@ -351,6 +371,8 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
         if isinstance(func, ast.Attribute) and func.attr in STR_METHODS:
             is_type_call = isinstance(func.value, ast.Name) and func.value.id == "str"
             out.add("str_method", 1 if is_type_call else 0, node, func)
+            if not is_type_call and _str_receiver(func.value, out.bound):
+                out.add("str_method", 2, node, func)
         # k: range(0, n) / range(n)
         if _call_to(node, "range") and not node.keywords:
             if len(node.args) == 2 and _const(node.args[0], 0):
@@ -475,8 +497,26 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
         out.add("aug_inc", 1, node)
 
 
+def _str_receiver(recv: ast.AST, bound: frozenset[str]) -> bool:
+    """Il ricevitore è certamente una ``str``: letterale stringa, f-string, o chiamata a
+    ``input``/``str``/``repr``/``format`` non ridefinite; ``str`` stesso non ridefinito (la forma 1
+    scrive ``str.m(...)``)."""
+    if "str" in bound:
+        return False
+    if isinstance(recv, ast.Constant) and isinstance(recv.value, str):
+        return True
+    if isinstance(recv, ast.JoinedStr):
+        return True
+    return (
+        isinstance(recv, ast.Call)
+        and isinstance(recv.func, ast.Name)
+        and recv.func.id in STR_PRODUCERS
+        and recv.func.id not in bound
+    )
+
+
 def scan(index: AstIndex) -> _Counter:
-    out = _Counter()
+    out = _Counter(frozenset(module_bindings(index.tree)))
     for node in index.order:
         _visit(node, index, out)
     return out
@@ -548,7 +588,17 @@ def estimate_counters(pattern: Pattern, all_forms: bool = False) -> tuple[str, .
     if pattern.name in ("aug_inc", "elif", "const_pow"):
         return ()
     forms = range(len(pattern.forms)) if all_forms else pattern.site_forms
-    return tuple(pattern.counter(i) for i in forms if not _duplicate_counter(pattern, i))
+    return tuple(
+        pattern.counter(i)
+        for i in forms
+        if not _duplicate_counter(pattern, i) and not (all_forms and _subset_counter(pattern, i))
+    )
+
+
+def _subset_counter(pattern: Pattern, form: int) -> bool:
+    """Contatori che sono un sottoinsieme di un'altra forma dello stesso pattern
+    (``g.f0_guarded`` ⊂ ``g.f0``): nella variante ``all_forms`` non si sommano."""
+    return pattern.form_id(form) == "f0_guarded"
 
 
 def summarize_candidates(rows: list) -> dict:
