@@ -18,3 +18,4 @@ Prima di qualsiasi lavoro leggi `PIPELINE_metodo.md` per intero. È la specifica
 - Ogni nuovo modulo ha test; `pytest`, `ruff` e `mypy` (non strict) puliti prima di ogni commit.
 - Ogni deviazione da MCSS (paper arXiv 2607.06009v1) va scritta subito nella sezione «Deviazioni dal paper» di `docs/mcss_deviations.md` di questo repository; il benchmark la riprende nell'audit.
 - Non inventare valori: dove serve una scelta non coperta dalla pipeline, `TODO(ivan)` nel codice e nel riepilogo.
+- A ogni fase che cambia il comportamento del codice, oltre ai test, scrivi `docs/reports/P<n>_esempi.md` con due o tre esempi completi (codice di partenza, siti, bit, codice marcato con diff, rilettura e punteggio; se c'è un attacco, anche prima/dopo), secondo `PIPELINE_metodo.md` §1 regola 12. Ivan li legge a mano: sono parte dei criteri di accettazione.
