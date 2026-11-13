@@ -35,11 +35,18 @@ Rango: ordine di visita della **prima** occorrenza di binding del nome nella fun
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
+import builtins
+import json
+import keyword
+import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional, Protocol
 
 from multimark._astindex import FUNCTION_TYPES, AstIndex, FunctionUnit, iter_preorder
+from multimark.prf import prf_bit, prf_int
 
 NAME_VARIANTS = ("V0", "V1", "V1b", "V2", "V2b")
 _DYNAMIC_SCOPE = frozenset({"locals", "vars", "eval", "exec"})
@@ -55,6 +62,8 @@ class NameSite:
     rank: int
     lineno: int
     col_offset: int
+    #: posizione di visita del primo binding (``AstIndex.order``); -1 se ignota
+    position: int = -1
 
     @property
     def key(self) -> tuple[str, int, str, int]:
@@ -149,6 +158,26 @@ def _module_scope_nodes(tree: ast.AST) -> list[ast.AST]:
     return out
 
 
+def _class_body_ids(tree: ast.AST) -> set[int]:
+    """Id dei nodi il cui scope più interno è il corpo di una classe (non i metodi): i loro nomi
+    sono attributi della classe, non variabili (come per T1.4, che usa gli scope di LibCST)."""
+    out: set[int] = set()
+    stack: list[tuple[ast.AST, bool]] = [(tree, False)]
+    while stack:
+        node, in_class = stack.pop()
+        if in_class:
+            out.add(id(node))
+        if isinstance(node, ast.ClassDef):
+            child_flag = True
+        elif isinstance(node, (*FUNCTION_TYPES, ast.Lambda)):
+            child_flag = False
+        else:
+            child_flag = in_class
+        for child in ast.iter_child_nodes(node):
+            stack.append((child, child_flag))
+    return out
+
+
 def _dunder_all(tree: ast.Module) -> set[str]:
     """Nomi elencati in ``__all__`` (assegnazioni e ``+=`` di liste o tuple di stringhe)."""
     out: set[str] = set()
@@ -222,10 +251,11 @@ def name_sites(
     ``vars``, ``eval``, ``exec``, ``globals`` nel proprio scope. I parametri non riguardano il
     modulo."""
     excluded = _module_exclusions(index.tree)
+    in_class_body = _class_body_ids(index.tree)
     nodes_by_unit: dict[int, list[ast.AST]] = {}
     for node in index.order:
         unit = index.unit_of(node)
-        if not unit.is_module:
+        if not unit.is_module and id(node) not in in_class_body:
             nodes_by_unit.setdefault(unit.index, []).append(node)
     out: list[NameSite] = []
     for unit in index.functions:
@@ -245,8 +275,8 @@ def name_sites(
             for n, (pos, line, col) in first.items()
             if _common_rules(n, excluded, other) and (include_params or n not in params)  # (b)
         ]
-        for rank, (_, n, line, col) in enumerate(sorted(chosen)):
-            out.append(NameSite(unit, n, rank, line, col))
+        for rank, (pos, n, line, col) in enumerate(sorted(chosen)):
+            out.append(NameSite(unit, n, rank, line, col, pos))
     if module_level:
         out.extend(_module_name_sites(index, excluded, excluded_binding_ids))
     return out
@@ -272,21 +302,167 @@ def _module_name_sites(
     ]
     unit = index.unit_of(tree)
     return [
-        NameSite(unit, n, rank, line, col) for rank, (_, n, line, col) in enumerate(sorted(chosen))
+        NameSite(unit, n, rank, line, col, pos)
+        for rank, (pos, n, line, col) in enumerate(sorted(chosen))
     ]
 
 
-# ---------------------------------------------------------------------- P1 / P3
+# ---------------------------------------------------------------------- norm e stili (§3.6.2, §4.3)
+
+_SEGMENT = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z0-9]+|[A-Z]+[0-9]*|[0-9]+")
+
+#: Stili V1 (§4.3): indice = valore a 2 bit.
+STYLES = ("snake", "camel", "pascal", "caps")
+
+
+def segments(name: str) -> list[str]:
+    """Segmenti di un nome: si spezza su ``_``, sui cambi minuscolo→maiuscolo e sulle sequenze
+    di maiuscole seguite da minuscola. Le cifre stanno con le minuscole che le precedono
+    (``item2Count`` → ``item2``, ``Count``). TODO(ivan): la pipeline non dice nulla sulle cifre."""
+    out: list[str] = []
+    for part in name.split("_"):
+        out.extend(_SEGMENT.findall(part))
+    return out
 
 
 def normalize_name(name: str) -> str:
-    """``norm(n)`` di §3.6.2 (``totalCount`` → ``total_count``). Arriva in P1."""
-    raise NotImplementedError("P1: normalizzazione dei nomi (§3.6.2)")
+    """``norm(n)`` di §3.6.2: segmenti in minuscolo uniti da ``_``."""
+    return "_".join(s.lower() for s in segments(name))
+
+
+def _cap(seg: str) -> str:
+    return seg[:1].upper() + seg[1:].lower()
+
+
+def render_style(segs: Sequence[str], style: int) -> str:
+    """Nome nello stile ``style`` (0 snake, 1 camel, 2 Pascal, 3 ALL_CAPS) dai segmenti."""
+    low = [s.lower() for s in segs]
+    if style == 0:
+        return "_".join(low)
+    if style == 1:
+        return low[0] + "".join(_cap(s) for s in low[1:])
+    if style == 2:
+        return "".join(_cap(s) for s in low)
+    if style == 3:
+        return "_".join(s.upper() for s in low)
+    raise ValueError(f"style must be 0..3: {style}")
 
 
 def read_style(name: str) -> Optional[int]:
-    """Lettura V1 (§4.3): stile a 2 bit o ``None``. Arriva in P1."""
-    raise NotImplementedError("P1: lettura V1 (§4.3)")
+    """Lettura V1 (§4.3): stile a 2 bit, solo per nomi con almeno 2 segmenti; altrimenti
+    ``None``. Un nome che non coincide con nessuna resa dei suoi segmenti dà ``None``."""
+    segs = segments(name)
+    if len(segs) < 2:
+        return None
+    for style in range(4):
+        if render_style(segs, style) == name:
+            return style
+    return None
+
+
+def read_style_v1b(name: str) -> Optional[int]:
+    """Lettura V1b: snake 0, camel 1, altri stili ``None``."""
+    style = read_style(name)
+    return style if style in (0, 1) else None
+
+
+def name_bit(key: int, name: str) -> int:
+    """Lettura V2 (e V2b): ``prf_bit(K, "name", norm(n))``."""
+    return prf_bit(key, "name", normalize_name(name))
+
+
+def name_slot(key: int, name: str, b: int) -> int:
+    """Indirizzo V2b: ``prf_int(K, "name-slot", norm(n)) mod B``."""
+    return prf_int(key, "name-slot", normalize_name(name)) % b
+
+
+# ---------------------------------------------------------------------- suffissi V1 (§4.2 punto 4)
+
+
+def type_suffix(value: Optional[ast.AST]) -> str:
+    """Suffisso per estendere un nome di una parola (V1, §4.2 punto 4), dal valore del primo
+    binding se letterale o costruttore: ``int`` → ``count``, ``float`` → ``val``, ``str`` →
+    ``str``, ``list`` → ``list``, ``dict`` → ``map``, ``bool`` → ``flag``, altrimenti ``val``."""
+    if isinstance(value, ast.Constant):
+        v = value.value
+        if isinstance(v, bool):
+            return "flag"
+        if isinstance(v, int):
+            return "count"
+        if isinstance(v, float):
+            return "val"
+        if isinstance(v, str):
+            return "str"
+        return "val"
+    if isinstance(value, (ast.List, ast.ListComp)):
+        return "list"
+    if isinstance(value, (ast.Dict, ast.DictComp)):
+        return "map"
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        return {"int": "count", "float": "val", "str": "str", "list": "list", "dict": "map",
+                "bool": "flag"}.get(value.func.id, "val")  # fmt: skip
+    return "val"
+
+
+def first_binding_value(index: AstIndex, site: NameSite) -> Optional[ast.AST]:
+    """Valore assegnato dal primo binding della variabile (``None`` se non è un'assegnazione)."""
+    if site.position < 0:
+        return None
+    node = index.order[site.position]
+    parent = index.parent_of(node)
+    if isinstance(parent, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+        return parent.value
+    return None
+
+
+# ---------------------------------------------------------------------- validità e proponenti
+
+_SNAKE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*")
+# Parole chiave «soft» fissate a mano: ``keyword.softkwlist`` non esiste in Python 3.9 e la validità
+# di un nome non deve dipendere dalla versione dell'interprete.
+_RESERVED = frozenset(keyword.kwlist) | frozenset({"match", "case", "type", "_"})
+_BUILTINS = frozenset(builtins.__dict__)
+
+
+def identifiers_in(tree: ast.AST) -> set[str]:
+    """Tutti gli identificatori del modulo: nomi, parametri, attributi, ``def``/``class``,
+    ``import``, argomenti con nome, ``global``/``nonlocal``."""
+    out: set[str] = set()
+    for node in iter_preorder(tree):
+        if isinstance(node, ast.Name):
+            out.add(node.id)
+        elif isinstance(node, ast.arg):
+            out.add(node.arg)
+        elif isinstance(node, ast.Attribute):
+            out.add(node.attr)
+        elif isinstance(node, (*FUNCTION_TYPES, ast.ClassDef)):
+            out.add(node.name)
+        elif isinstance(node, ast.alias):
+            out.add(node.asname or node.name.split(".")[0])
+            out.update(node.name.split("."))
+        elif isinstance(node, ast.keyword) and node.arg:
+            out.add(node.arg)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            out.update(node.names)
+    return out
+
+
+def valid_new_name(candidate: str, original: str, used: set[str], snake: bool = True) -> bool:
+    """Validità di un nome nuovo (§3.6.4): identificatore, ``snake_case`` (solo V2/V2b),
+    ``len ≥ 2``, non riservato, non builtin, non già usato nel modulo, diverso dall'originale, non
+    termina con ``_`` e non inizia con ``_``; mai ``self``/``cls`` (resta un sito dei nomi)."""
+    return (
+        candidate.isidentifier()
+        and (not snake or _SNAKE.fullmatch(candidate) is not None)
+        and len(candidate) >= 2
+        and candidate not in _RESERVED
+        and candidate not in _BUILTINS
+        and candidate not in used
+        and candidate != original
+        and not candidate.endswith("_")
+        and not candidate.startswith("_")
+        and candidate not in _EXCLUDED_NAMES
+    )
 
 
 class Proposer(Protocol):
@@ -295,8 +471,32 @@ class Proposer(Protocol):
     def propose(self, code: str, function_name: str, var_name: str, k: int = 8) -> list[str]: ...
 
 
+SUFFIXES = ("value", "val", "item", "list", "count", "idx", "tmp", "res")
+PREFIXES = ("cur_", "new_", "the_")
+
+
+@lru_cache(maxsize=1)
+def synonyms() -> dict[str, tuple[str, ...]]:
+    """Dizionario fisso ``multimark/data/name_synonyms.json`` (nome normalizzato → sinonimi)."""
+    path = Path(__file__).with_name("data") / "name_synonyms.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {k: tuple(v) for k, v in data.items() if not k.startswith("_")}
+
+
 class StaticProposer:
-    """Ripiego non neurale (§3.6.4): sinonimi, suffissi, prefissi. Arriva in P1."""
+    """Ripiego non neurale (§3.6.4). Candidati, in quest'ordine: (1) sinonimi di ``norm(n)`` dal
+    dizionario fisso; (2) ``norm(n) + "_" + suffisso``; (3) prefisso + ``norm(n)``. Restituisce i
+    primi ``k`` candidati validi (§3.6.4) rispetto al codice dato."""
 
     def propose(self, code: str, function_name: str, var_name: str, k: int = 8) -> list[str]:
-        raise NotImplementedError("P1: StaticProposer (§3.6.4)")
+        base = normalize_name(var_name)
+        raw = [*synonyms().get(base, ()), *(f"{base}_{s}" for s in SUFFIXES),
+               *(f"{p}{base}" for p in PREFIXES)]  # fmt: skip
+        used = identifiers_in(ast.parse(code))
+        out: list[str] = []
+        for cand in raw:
+            if cand not in out and valid_new_name(cand, var_name, used):
+                out.append(cand)
+            if len(out) == k:
+                break
+        return out

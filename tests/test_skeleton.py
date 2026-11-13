@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 import pytest
 
-from multimark import codec, detect, embed, names
+from multimark import codec, detect, embed
 from multimark.config import Config, mcss_profile, multimark_base
 
 
@@ -41,9 +41,6 @@ def test_codeword_length() -> None:
 
 
 STUBS: list[tuple[Callable[..., Any], tuple]] = [
-    (names.normalize_name, ("totalCount",)),
-    (names.read_style, ("total_count",)),
-    (names.StaticProposer().propose, ("", "f", "x")),
     (embed.embed, ("x = 1\n", [0] * 24, 1, multimark_base())),
     (detect.detect, ("x = 1\n", [0] * 24, 1, multimark_base())),
     (detect.binom_tail_score, (10, 5)),
