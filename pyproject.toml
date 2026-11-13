@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multimark"
+version = "0.0.1"
+description = "Watermark multi-bit post-hoc per codice Python (MultiMark) e reimplementazione di MCSS"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["libcst"]
+
+[project.optional-dependencies]
+neural = ["torch", "transformers"]
+dev = ["pytest", "hypothesis", "ruff", "mypy<1.16"]
+
+[project.scripts]
+multimark-inventory = "multimark.cli.inventory:main"
+
+[tool.setuptools.packages.find]
+include = ["multimark*"]
+
+[tool.setuptools.package-data]
+multimark = ["py.typed", "data/*.json"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+
+[tool.ruff.lint.pyupgrade]
+# Python 3.9: niente `X | Y` nei tipi valutati a runtime (CLAUDE.md).
+keep-runtime-typing = true
+
+[tool.mypy]
+python_version = "3.9"
+files = ["multimark", "tests"]
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["hypothesis.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
