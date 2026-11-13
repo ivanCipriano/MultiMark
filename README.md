@@ -14,8 +14,8 @@ La specifica vincolante è [`PIPELINE_metodo.md`](PIPELINE_metodo.md); le regole
 
 | Fase | Contenuto | Stato |
 |---|---|---|
-| P0 | scheletro, riconoscimento dei siti (8 canali strutturali + nomi), inventario | fatto |
-| P1 | scrittura LibCST, legame, maschera, codice compatto, inserimento e rilevazione | da fare |
+| P0 | scheletro, riconoscimento dei siti (8 canali strutturali + nomi), inventario; P0-bis candidati | fatto |
+| P1 | canali 9–14, scrittura LibCST, rinomina, legame, maschera, codice compatto, inserimento e rilevazione, autovalidazione | fatto (in attesa della lettura di Ivan) |
 | P3 | proponente neurale dei nomi (`names_neural.py`) | da fare |
 
 ## Installazione
@@ -33,13 +33,17 @@ pip install -e ".[dev]"     # più pytest, hypothesis, ruff, mypy
 | Modulo | Contenuto |
 |---|---|
 | `multimark/_astindex.py` | visita in pre-ordine, unità di funzione e `fid` (§3.2), predicati `kind`/puro |
-| `multimark/channels.py` | gli 8 canali: riconoscimento e lettura (P0), scrittura (P1) |
+| `multimark/channels.py` | i 14 canali: riconoscimento e lettura (opzione `channels`: `mcss8`, `extended`) |
+| `multimark/rewrite.py` | scrittura con LibCST delle forme dei siti e rinomina delle variabili (`ScopeProvider`) |
+| `multimark/layout.py` | posizioni di bit e maschera di ogni sito (legame per funzione, single run, posizionale) |
 | `multimark/sites.py` | ricerca dei siti, sovrapposizioni, rango (§3.3–3.4) |
-| `multimark/names.py` | canale dei nomi: quali variabili sono siti (P0); varianti e proponenti (P1) |
+| `multimark/names.py` | canale dei nomi: variabili sito (anche di modulo), norm, stili V1/V1b, V2/V2b, `StaticProposer` (`data/name_synonyms.json`) |
 | `multimark/inventory.py`, `multimark/cli/inventory.py` | inventario dei siti per campione e per dataset |
 | `multimark/candidates.py`, `multimark/cli/candidates.py` | P0-bis: conteggio dei canali candidati (23 pattern, solo lettura; vedi `docs/reports/P0bis_candidati.md`) |
 | `multimark/config.py` | opzioni di §3.11 e profili `multimark_base()` / `mcss_profile()` |
-| `multimark/{prf,codec,linking,embed,detect}.py` | firme di §3 (P1) |
+| `multimark/prf.py`, `codec.py`, `linking.py` | PRF, alfabeto a 6 bit, codice compatto e decodifica per cancellazioni, legame e maschera |
+| `multimark/embed.py`, `detect.py` | inserimento (§3.9) e rilevazione (§3.10) |
+| `multimark/synthetic.py`, `multimark/cli/selftest.py` | frammenti sintetici e autovalidazione di P1 (`docs/milestone_logs/P1_selftest.txt`) |
 
 ## Inventario dei siti
 
@@ -57,6 +61,18 @@ dei nomi, §7 punto C). Colonne per campione: `n_sites_total` (strutturali + `n_
 2·`n_vars`, capacità di `mcss`), `n_functions`, `n_duplicate_fids`, `loc`. Il riepilogo riporta
 media, mediana, P25, P75, la frazione di campioni con `n_sites_total ≥ 32`, `≥ 20`, `≥ 13` e la
 frazione di campioni con almeno un `fid` duplicato.
+
+## Inserimento e rilevazione
+
+```python
+from multimark.config import multimark_base, mcss_profile
+from multimark.embed import embed
+from multimark.detect import detect
+
+cfg = multimark_base()                     # mcss_profile() per la reimplementazione di MCSS
+r = embed(code, "0101…(24 bit)", key, cfg)  # r.code, r.status (OK/PARTIAL/FAILED), r.extra
+d = detect(r.code, "0101…", key, cfg, registry_seed=global_seed)  # d.score, d.extra
+```
 
 ## Sviluppo
 
