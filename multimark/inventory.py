@@ -6,17 +6,21 @@ Per campione (``inventory_code``):
 - ``n_sites_structural``: somma degli 8 canali;
 - ``n_vars``: siti del canale dei nomi secondo la regola di §3.6.1;
 - ``n_sites_total = n_sites_structural + n_vars`` (un bit per variabile, come la V2 della base:
-  è la ``N`` di §3.9 confrontata con ``B = 32``). TODO(ivan): confermare che ``n_sites_total``
-  includa le variabili; per ``mcss`` (V1) i bit sarebbero ``n_sites_structural + 2·n_vars``, che
-  si ricava dalle colonne;
+  è la ``N`` di §3.9 confrontata con ``B = 32``; confermato da Ivan il 13 novembre 2026);
+- ``n_bits_v1 = n_sites_structural + 2·n_vars``: capacità con il canale dei nomi V1 di ``mcss``
+  (2 bit per variabile). Le variabili sono quelle delle opzioni dell'inventario: per il profilo
+  ``mcss`` completo si lancia con ``--canonical paper --include-params``;
 - ``n_functions``: unità di funzione di §3.2 (funzioni più esterne, ``MODULE`` escluso);
+- ``n_duplicate_fids``: numero di ``fid`` distinti condivisi da almeno due funzioni del campione
+  (i loro siti condividono le chiavi ``(fid, canale, rango)``, vedi ``sites.py``);
 - ``loc``: righe di codice come ``bench.lang.line_counter`` (una riga conta se contiene un token
   che non è un commento; le stringhe su più righe contano per tutte le righe; docstring escluse).
 
 Per dataset (``summarize``): media, mediana, P25, P75 (interpolazione lineare, come il default di
-``numpy.percentile``) e frazione di campioni con ``n_sites_total ≥ 32``, ``≥ 20``, ``≥ 13``; canale
-più frequente (per numero totale di siti). I campioni che non si analizzano sono contati a parte
-(``n_parse_errors``) e non entrano nelle statistiche.
+``numpy.percentile``) e frazione di campioni con ``n_sites_total ≥ 32``, ``≥ 20``, ``≥ 13``;
+frazione di campioni con almeno un ``fid`` duplicato; canale più frequente (per numero totale di
+siti). I campioni che non si analizzano sono contati a parte (``n_parse_errors``) e non entrano
+nelle statistiche.
 """
 
 from __future__ import annotations
@@ -38,8 +42,10 @@ STAT_COLUMNS = (
     "n_sites_total",
     "n_sites_structural",
     "n_vars",
+    "n_bits_v1",
     *(f"n_sites_{c}" for c in CHANNELS),
     "n_functions",
+    "n_duplicate_fids",
     "loc",
 )
 
@@ -104,9 +110,11 @@ def inventory_code(
     row["n_sites_total"] = len(sites) + len(names)
     row["n_sites_structural"] = len(sites)
     row["n_vars"] = len(names)
+    row["n_bits_v1"] = len(sites) + 2 * len(names)
     for channel in CHANNELS:
         row[f"n_sites_{channel}"] = counts[channel]
     row["n_functions"] = len(index.functions)
+    row["n_duplicate_fids"] = index.n_duplicate_fids
     row["loc"] = count_loc(code, index.tree)
     return row
 
@@ -145,6 +153,9 @@ def summarize(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         out[f"frac_total_ge_{th}"] = (
             sum(1 for v in totals if v >= th) / len(totals) if totals else math.nan
         )
+    out["frac_with_duplicate_fids"] = (
+        sum(1 for r in ok if r["n_duplicate_fids"] > 0) / len(ok) if ok else math.nan
+    )
     channel_totals = {c: sum(r[f"n_sites_{c}"] for r in ok) for c in CHANNELS}
     channel_totals["names"] = sum(r["n_vars"] for r in ok)
     out["sites_by_channel"] = channel_totals
@@ -174,6 +185,7 @@ def format_summary(summary: dict[str, Any], label: str = "") -> str:
     )
     for th in THRESHOLDS:
         lines.append(f"frac n_sites_total >= {th}: {summary[f'frac_total_ge_{th}']:.4f}")
+    lines.append(f"frac with duplicate fids: {summary['frac_with_duplicate_fids']:.4f}")
     lines.append(f"most frequent structural channel: {summary['most_frequent_structural_channel']}")
     lines.append(f"most frequent channel (names included): {summary['most_frequent_channel']}")
     lines.append("")

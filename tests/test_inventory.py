@@ -47,6 +47,8 @@ def test_inventory_row() -> None:
     assert row["n_vars"] == 2  # result, values (step è bersaglio di list_comp)
     assert row["n_sites_structural"] == sum(row[f"n_sites_{c}"] for c in CHANNELS)
     assert row["n_sites_total"] == row["n_sites_structural"] + row["n_vars"]
+    assert row["n_bits_v1"] == row["n_sites_structural"] + 2 * row["n_vars"]
+    assert row["n_duplicate_fids"] == 0
     # righe di codice: import, def, result, if, return None, values, for, append, return
     assert row["loc"] == 9
 
@@ -58,6 +60,28 @@ def test_inventory_options() -> None:
     assert inventory_code(code, canonical="paper", guards=False)["n_sites_compare_dir"] == 2
     assert inventory_code(code)["n_vars"] == 1
     assert inventory_code(code, include_params=True)["n_vars"] == 3
+
+
+def test_inventory_duplicate_fids() -> None:
+    code = src(
+        """
+        class A:
+            def run(self):
+                pass
+        class B:
+            def run(self):
+                pass
+            def go(self):
+                pass
+        class C:
+            def go(self):
+                pass
+        def run(x):
+            pass
+        """
+    )
+    row = inventory_code(code)
+    assert row["n_functions"] == 5 and row["n_duplicate_fids"] == 2
 
 
 def test_inventory_syntax_error() -> None:
@@ -95,6 +119,8 @@ def test_summarize() -> None:
     assert s["most_frequent_structural_channel"] == "operand_order"
     assert s["sites_by_channel"]["compare_dir"] == 3
     assert s["stats"]["n_sites_total"]["median"] == 1.0
+    assert s["stats"]["n_bits_v1"]["mean"] == (3 * 1 + 60) / 4
+    assert s["frac_with_duplicate_fids"] == 0.0
 
 
 def test_summarize_empty() -> None:
@@ -130,6 +156,7 @@ def test_cli(tmp_path: Path, ext: str) -> None:
         assert rows[0]["n_sites_compare_dir"] == 1 and rows[1]["parse_ok"] is False
     text = summary.read_text(encoding="utf-8")
     assert "Inventory test" in text and "frac n_sites_total >= 32" in text
+    assert "frac with duplicate fids" in text and "n_bits_v1" in text
     data = json.loads(summary_json.read_text(encoding="utf-8"))
     assert data["n_parse_errors"] == 1 and data["options"]["guards"] is True
 
