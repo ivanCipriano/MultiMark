@@ -38,7 +38,8 @@ def phi_function(key: int, fid_name: str, n_params: int, channel: str, rank: int
 
 
 def phi_single_run(key: int, fid_name: str, n_params: int, run_rank: int, b: int) -> int:
-    """Indice del bit con ``linking=function_single_run`` (rango su tutti i canali della funzione)."""
+    """Indice del bit con ``linking=function_single_run`` (rango su tutti i canali della
+    funzione)."""
     return (prf_int(key, "offset", fid_name, str(n_params)) + run_rank) % b
 
 
