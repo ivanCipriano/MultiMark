@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 import pytest
 
-from multimark import codec, detect, embed, linking, names, prf
+from multimark import codec, detect, embed, linking, names
 from multimark.config import Config, mcss_profile, multimark_base
 
 
@@ -41,14 +41,6 @@ def test_codeword_length() -> None:
 
 
 STUBS: list[tuple[Callable[..., Any], tuple]] = [
-    (prf.prf, (1, "a")),
-    (prf.prf_int, (1, "a")),
-    (prf.prf_bit, (1, "a")),
-    (codec.text_to_bits, ("gpt4",)),
-    (codec.bits_to_text, ([0] * 6,)),
-    (codec.parity_matrix, (24, 2)),
-    (codec.encode, ([0] * 24, 2)),
-    (codec.decode_erasures, ([0] * 32, 24, 2)),
     (linking.phi_function, (1, "f", 0, "aug_assign", 0, 32)),
     (linking.phi_positional, (1, 10, 32)),
     (linking.mask, (1, "f", 0, "aug_assign", 0)),
