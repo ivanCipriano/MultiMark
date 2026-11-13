@@ -51,9 +51,11 @@ python -m multimark.cli.inventory --input codes.jsonl --output rows.csv \
 
 Opzioni: `--canonical {kind,paper}` (forme canoniche di `multimark` o di `mcss`), `--no-guards`
 (senza le condizioni semantiche dei canali, §4.2 punto 6), `--include-params` (parametri nel canale
-dei nomi, §7 punto C). Colonne per campione: `n_sites_total`, `n_sites_structural`,
-`n_sites_<canale>` per gli 8 canali, `n_vars`, `n_functions`, `loc`. Il riepilogo riporta media,
-mediana, P25, P75 e la frazione di campioni con `n_sites_total ≥ 32`, `≥ 20`, `≥ 13`.
+dei nomi, §7 punto C). Colonne per campione: `n_sites_total` (strutturali + `n_vars`),
+`n_sites_structural`, `n_sites_<canale>` per gli 8 canali, `n_vars`, `n_bits_v1` (strutturali +
+2·`n_vars`, capacità di `mcss`), `n_functions`, `n_duplicate_fids`, `loc`. Il riepilogo riporta
+media, mediana, P25, P75, la frazione di campioni con `n_sites_total ≥ 32`, `≥ 20`, `≥ 13` e la
+frazione di campioni con almeno un `fid` duplicato.
 
 ## Sviluppo
 
