@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Optional
 
-from multimark.channels import CANONICAL_MODES, ReadOptions
+from multimark.channels import CANONICAL_MODES, CHANNEL_SET_NAMES, ReadOptions
 from multimark.linking import LINKING_MODES
 from multimark.names import NAME_VARIANTS
 
@@ -33,6 +33,8 @@ class Config:
     names_include_params: bool = False
     # [v1.2] variabili di modulo nel canale dei nomi: decisione O di §7, ``false`` fino ad allora
     names_module_level: bool = False
+    # [v1.2] canali strutturali: ``extended`` (1–14, base) o ``mcss8`` (1–8)
+    channels: str = "extended"
     voting: str = "simple"
     channel_weights: Optional[str] = None
     registry_seed: Optional[int] = None
@@ -46,6 +48,7 @@ class Config:
             ("names.variant", self.names_variant, NAME_VARIANTS),
             ("names.proposer", self.names_proposer, PROPOSERS),
             ("voting", self.voting, VOTING_MODES),
+            ("channels", self.channels, CHANNEL_SET_NAMES),
         )
         for name, value, allowed in checks:
             if value not in allowed:
@@ -62,7 +65,7 @@ class Config:
 
     @property
     def read_options(self) -> ReadOptions:
-        return ReadOptions(canonical=self.canonical)
+        return ReadOptions(canonical=self.canonical, channels=self.channels)
 
     def with_(self, **changes: object) -> Config:
         return replace(self, **changes)  # type: ignore[arg-type]
@@ -82,4 +85,5 @@ def mcss_profile() -> Config:
         names_variant="V1",
         names_include_params=True,
         names_module_level=True,
+        channels="mcss8",
     )
