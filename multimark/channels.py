@@ -19,8 +19,8 @@ da P1, scrittura con LibCST. In P0 c'è solo il **riconoscimento** (``recognize`
 le sole condizioni *semantiche* (purezza, insieme degli operatori e tipo dell'operando di
 ``aug_assign``, ``kind`` dell'altro operando di ``operand_order``, condizioni su ``L`` e ``x`` di
 ``list_comp``, ridefinizione di ``list``/``dict``); restano quelle che servono perché le due forme
-siano definite e quelle di non interferenza qui sotto. TODO(ivan): confermare questo perimetro di
-``--no-guards``.
+siano definite e quelle di non interferenza qui sotto (perimetro confermato da Ivan, 13 novembre
+2026).
 
 **Non interferenza (§3.3.2 punto 3).** Oltre alla regola «un nodo appartiene al più a un sito, vince
 il canale con numero minore» (applicata in ``sites.py`` con gli insiemi ``owned``), alcune
@@ -38,7 +38,8 @@ sito non crei né distrugga siti di altri canali:
 - (canale dei nomi, ``names.py``) il bersaglio del ciclo di un sito ``list_comp`` in forma 0 non è
   un binding, come la variabile di una comprehension.
 
-Queste regole sono interpretazioni di §3.3.2 (TODO(ivan): confermare).
+Queste regole applicano §3.3.2 e sono confermate da Ivan (13 novembre 2026; MD10 di
+``docs/mcss_deviations.md``).
 """
 
 from __future__ import annotations
@@ -49,14 +50,13 @@ from typing import Callable, Optional
 
 from multimark._astindex import (
     AstIndex,
-    end_key,
     is_none,
     is_numeric_constant,
     is_pure,
+    iter_preorder,
     kind,
     module_bindings,
     names_in,
-    start_key,
 )
 
 CHANNELS: tuple[str, ...] = (
@@ -109,12 +109,13 @@ class ReadContext:
         self.index = index
         self.options = options
         self.bound = module_bindings(index.tree)
-        # Letture ``Name`` per (unità, nome), con posizione d'inizio (``list_comp``).
-        self.loads: dict[tuple[int, str], list[tuple[int, int]]] = {}
+        # Riferimenti ``Name`` che non sono binding (``Load``, ``Del``) per (unità, nome): servono
+        # alla condizione su ``x`` di ``list_comp``.
+        self.references: dict[tuple[int, str], list[int]] = {}
         for node in index.order:
-            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Load, ast.Del)):
                 key = (index.unit_of(node).index, node.id)
-                self.loads.setdefault(key, []).append(start_key(node))
+                self.references.setdefault(key, []).append(id(node))
 
     @property
     def guards(self) -> bool:
@@ -281,24 +282,33 @@ def _loop_append(loop: ast.AST, list_name: str) -> Optional[tuple[ast.Name, ast.
 
 
 def _list_comp_conditions(
-    list_name: str, var: str, expr: ast.AST, it: ast.AST, last: ast.AST, ctx: ReadContext
+    list_name: str,
+    var: str,
+    expr: ast.AST,
+    it: ast.AST,
+    site_stmts: tuple[ast.AST, ...],
+    ctx: ReadContext,
 ) -> bool:
-    """Condizioni di §3.3.1 riga 4 su ``L``, ``x``, ``expr``, ``it``.
+    """Condizioni di §3.3.1 riga 4 su ``L``, ``x``, ``expr``, ``it`` (decisioni di Ivan del 13
+    novembre 2026, MD12):
 
-    «``expr`` e ``it`` puri rispetto a ``L``» è letto come «``L`` non compare in ``expr`` né in
-    ``it``» (TODO(ivan): confermare; la lettura «puri» in senso stretto escluderebbe ogni
-    ``range(n)``). «``x`` non è letto dopo il ciclo»: nessuna lettura ``Name(x)`` nella stessa unità
-    che inizi dopo la fine del sito (TODO(ivan): una lettura *prima* del ciclo dentro un ciclo
-    esterno non è esclusa)."""
+    - «``expr`` e ``it`` puri rispetto a ``L``» significa esattamente «``L`` non compare in
+      ``expr`` né in ``it``»; nessun requisito di purezza (``range(n)`` va bene);
+    - ``x`` non compare in ``it``;
+    - «``x`` non letto dopo il ciclo», in forma stretta: nella funzione ``x`` non ha **nessun**
+      riferimento (lettura o ``del``) fuori dalle istruzioni del sito, né prima né dopo né in cicli
+      esterni; sono ammessi solo altri binding di ``x`` come bersaglio. Una lettura «prima» dentro
+      un ciclo esterno è una lettura dopo nel tempo, e nella forma comprehension ``x`` non sarebbe
+      definita."""
     if var == list_name:
         return False
     if not ctx.guards:
         return True
     if var in names_in(it) or list_name in names_in(expr) or list_name in names_in(it):
         return False
-    unit = ctx.index.unit_of(last)
-    end = end_key(last)
-    return not any(pos > end for pos in ctx.loads.get((unit.index, var), []))
+    unit = ctx.index.unit_of(site_stmts[0])
+    inside = {id(n) for stmt in site_stmts for n in iter_preorder(stmt)}
+    return all(ref in inside for ref in ctx.references.get((unit.index, var), []))
 
 
 def list_comp_loop_form(
@@ -325,7 +335,7 @@ def list_comp_loop_form(
         return None
     var, expr, stmt = found
     assert isinstance(loop, ast.For)
-    if not _list_comp_conditions(target.id, var.id, expr, loop.iter, loop, ctx):
+    if not _list_comp_conditions(target.id, var.id, expr, loop.iter, (assign, loop), ctx):
         return None
     call = stmt.value
     assert isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
@@ -348,7 +358,7 @@ def recognize_list_comp(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     gen = comp.generators[0]
     if gen.ifs or gen.is_async or not isinstance(gen.target, ast.Name):
         return None
-    if not _list_comp_conditions(target.id, gen.target.id, comp.elt, gen.iter, node, ctx):
+    if not _list_comp_conditions(target.id, gen.target.id, comp.elt, gen.iter, (node,), ctx):
         return None
     return Match("list_comp", node, 1, _ids(node, target, comp, gen, gen.target))
 

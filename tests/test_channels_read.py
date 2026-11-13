@@ -192,9 +192,44 @@ def test_list_comp_excluded(code: str) -> None:
     assert channel_values(code, "list_comp") == []
 
 
-def test_list_comp_read_before_loop_is_allowed() -> None:
-    code = "def f(a, v):\n    print(v)\n    out = []\n    for v in a:\n        out.append(v)\n"
+@pytest.mark.parametrize(
+    "code",
+    [
+        # lettura prima del ciclo
+        "def f(a, v):\n    print(v)\n    out = []\n    for v in a:\n        out.append(v)\n",
+        # lettura «prima» dentro un ciclo esterno (dopo nel tempo)
+        "def f(a, b):\n    for w in b:\n        print(v)\n"
+        "        out = []\n        for v in a:\n            out.append(v)\n",
+        # del
+        "def f(a):\n    out = []\n    for v in a:\n        out.append(v)\n    del v\n",
+        # lettura in una funzione annidata (stessa unità)
+        "def f(a):\n    def g():\n        return v\n"
+        "    out = []\n    for v in a:\n        out.append(v)\n",
+        # forma comprehension con lettura prima
+        "def f(a, v):\n    print(v)\n    out = [v for v in a]\n",
+        # lettura dentro un'altra comprehension della funzione
+        "def f(a):\n    out = [v for v in a]\n    other = [v for v in out]\n",
+    ],
+)
+def test_list_comp_var_with_other_references_is_excluded(code: str) -> None:
+    assert channel_values(code, "list_comp") == []
+
+
+def test_list_comp_var_other_bindings_are_allowed() -> None:
+    loop = "def f(a):\n    v = 0\n    out = []\n    for v in a:\n        out.append(v + 1)\n"
+    comp = "def f(a):\n    v = 0\n    out = [v + 1 for v in a]\n"
+    assert channel_values(loop, "list_comp") == [0]
+    assert channel_values(comp, "list_comp") == [1]
+
+
+def test_list_comp_iterable_need_not_be_pure() -> None:
+    code = "def f(n):\n    out = []\n    for v in range(n):\n        out.append(g(v))\n"
     assert channel_values(code, "list_comp") == [0]
+
+
+def test_list_comp_var_reference_in_other_function_is_irrelevant() -> None:
+    code = "def f(a):\n    out = [v for v in a]\n    return out\ndef h(v):\n    return v\n"
+    assert channel_values(code, "list_comp") == [1]
 
 
 # ---------------------------------------------------------------------- 5. ternary
