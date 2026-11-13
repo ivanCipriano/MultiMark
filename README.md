@@ -37,6 +37,7 @@ pip install -e ".[dev]"     # più pytest, hypothesis, ruff, mypy
 | `multimark/sites.py` | ricerca dei siti, sovrapposizioni, rango (§3.3–3.4) |
 | `multimark/names.py` | canale dei nomi: quali variabili sono siti (P0); varianti e proponenti (P1) |
 | `multimark/inventory.py`, `multimark/cli/inventory.py` | inventario dei siti per campione e per dataset |
+| `multimark/candidates.py`, `multimark/cli/candidates.py` | P0-bis: conteggio dei canali candidati (23 pattern, solo lettura; vedi `docs/reports/P0bis_candidati.md`) |
 | `multimark/config.py` | opzioni di §3.11 e profili `multimark_base()` / `mcss_profile()` |
 | `multimark/{prf,codec,linking,embed,detect}.py` | firme di §3 (P1) |
 
