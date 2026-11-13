@@ -241,20 +241,23 @@ Ordine = priorità rivista. Tempi in giorni di lavoro di Claude Code, test compr
 1. Attacco «rinomina della funzione d'ingresso» (`T1.7`, §7 punto H).
 2. T2.1 per singolo canale: punti `points` con `forced_types` (estensione di `RefactorAttack.apply_types(forced=…)`).
 3. Prova di aggiunta/rimozione di un sito (script di sviluppo, non attacco).
-4. Canali nuovi da Zottarelli (P8), uno alla volta, con i tre controlli di §3.3.2 e la flip rate.
+4. Canali nuovi dalle trasformazioni irrobustite da Simone (P8), uno alla volta, con i tre controlli di §3.3.2 e la flip rate.
 5. Voto pesato con cancellazioni come punto dell'ablazione.
 6. Esperimento piccolo sul codice umano fuori benchmark (§0.2): marcatura delle canoniche di L1 dev con `multimark`, rilevazione e Pass@1, solo come script `scripts/human_code_experiment.py` del benchmark.
 7. Integrazione di Zottarelli come metodo.
 
 ---
 
-### P8 — Lettura del repository di Zottarelli (0,5 giorni, appena Ivan dà il percorso)
+### P8 — Trasformazioni di Zottarelli: analisi e riuso delle versioni di Simone (0,5 giorni di analisi; integrazione in P7.4)
 
-Il percorso non è ancora noto (`TODO(ivan)`). Quando c'è:
-1. Elencare le trasformazioni T34–T39 (tesi pp. 50–57) e T1–T33 nel codice: per ciascuna, file, classe `CSTTransformer`, funzioni di supporto, condizioni di applicabilità.
-2. Giudicare riutilizzabile una trasformazione se: (a) le due forme sono entrambe riconoscibili (serve anche la trasformazione inversa, che in Zottarelli di solito manca: va scritta), (b) non dipende da spazi o a capo, (c) non ordina operandi per nome o hash (T46–T49 escluse).
-3. Ogni file copiato o adattato va annotato in `PROVENANCE.md` nella radice del repository `multimark` con: repository, commit, file d'origine, funzione, data, modifiche fatte (elenco puntato), licenza se dichiarata. Il codice copiato porta in testa un commento `# Origine: <repo>@<commit>:<file>::<funzione>; modifiche: …`.
-4. Candidati attesi (dalla tesi): T39 `method_call_to_type_call`, T38 `range_len_to_enumerate`, T37 `in_place_to_pure_method` (solo `sort`), T36 `split_chained_comparison`, T16 `remove_unnecessary_else`, T9 `merge_else_if_into_elif`, T17 `merge_nested_ifs`, T7 `square_identity`, T2 `remove_redundant_slice_index`, T31 `identity_comprehension`. L'elenco definitivo si compila dopo la lettura.
+Decisione di Ivan (13 novembre): le trasformazioni di Zottarelli **non si riscrivono**. Simone, per la sua tesi, le sta irrobustendo (controlli sui tipi, condizioni di applicabilità): se un canale nuovo serve, si prende la **sua** versione. Il repository di Zottarelli (`TODO(ivan)`: percorso) si legge solo per scegliere quali trasformazioni chiedere.
+
+1. **Analisi** (nella sessione del repository `multimark`, appena c'è il percorso): per T1–T39 (tesi pp. 50–57 e tabella di §5.3.6, pp. 112–113) elencare file, classe `CSTTransformer`, condizioni, flip rate per attacco. Giudicare candidata una trasformazione se: (a) le due forme sono riconoscibili sull'`ast`; (b) non dipende da spazi, a capo o commenti (T40–T45 escluse); (c) non ordina operandi per nome o hash (T46–T49 escluse); (d) compare con frequenza utile nell'inventario di P0 sul codice corto. Uscita: `docs/zottarelli_candidates.md` con, per ogni candidata, frequenza attesa e che cosa manca (inverso, condizione sui tipi).
+2. **Da Simone** (le sue versioni lavorano sull'`ast`, senza LibCST, e fanno solo l'andata): si prendono il riconoscimento della forma e la condizione di applicabilità (controlli sui tipi), che sono già nel formato del lettore di §3.1. Il **ritorno** e la **scrittura con LibCST** in entrambe le direzioni (§3.3.3) li scrive Claude Code: senza inverso una trasformazione non è un canale. Se Simone scrive il codice con `ast.unparse`, la sua scrittura non si riusa (perde commenti e formattazione).
+3. **Punto di controllo**: all'inizio di P7 Claude Code chiede a Ivan se le trasformazioni di Simone sono pronte; se sì si integrano, se no si prosegue senza (nessun canale di Zottarelli viene riscritto da zero).
+4. **Integrazione** (P7, punto 4), un canale alla volta, con i tre controlli di §3.3.2 e la flip rate: il canale entra solo come punto dell'ablazione, mai nella configurazione di base già congelata.
+5. **Provenienza**: ogni trasformazione presa dal repository di Simone (o, se mancasse, da quello di Zottarelli) va annotata in `PROVENANCE.md` con repository, commit, file d'origine, classe/funzione, data, modifiche fatte; in testa al file copiato il commento `# Origine: <repo>@<commit>:<file>::<classe>; modifiche: …`. Nella tesi la fonte si cita nel capitolo 4.
+6. Candidate attese dalla tesi di Zottarelli (da confermare con l'inventario): T39 `method_call_to_type_call`, T38 `range_len_to_enumerate`, T36 `split_chained_comparison`, T16 `remove_unnecessary_else`, T9 `merge_else_if_into_elif`, T17 `merge_nested_ifs`, T7 `square_identity`, T2 `remove_redundant_slice_index`, T31 `identity_comprehension`.
 
 ---
 
@@ -721,6 +724,7 @@ Regola: dove una decisione dipende da un numero non ancora misurato (C, D, G), s
    git push -u origin posthoc-multimark
    ```
 4. Sul cluster, nel repository del benchmark: `git fetch && git checkout posthoc-multimark && git submodule update --init third_party/multimark`.
+4b. Sul cluster, un clone a parte del metodo per le prove fuori dal benchmark (test della libreria, dimostratore, confronto con il codice ufficiale di MCSS): `git clone <url di multimark> /mnt/beegfs/did_tesi_nlp_330/icipriano/repo_multimark`, poi, una volta creato l'ambiente, `<prefisso>/posthoc/bin/python -m pip install -e . --no-deps` dentro il clone. Lì si fa solo `git pull` ed esecuzione, mai modifiche da committare. `third_party/multimark` e `build/patched/multimark` nel benchmark restano di sola lettura.
 5. Avviare Claude Code **nel repository `multimark`** con l'istruzione: «Leggi `CLAUDE.md` e `PIPELINE_metodo.md`; esegui la fase P0, parte del repository `multimark`». Alla fine della fase: commit locali di Claude Code, poi `git push` tuo.
 6. Avviare Claude Code **nel benchmark** (ramo `posthoc-multimark`) con l'istruzione: «Leggi `CLAUDE.md`, `SPEC.md`, `docs/cluster_info.md` e `third_party/multimark/PIPELINE_metodo.md`; esegui la fase P0, parte del benchmark». Poi `git push` tuo.
 7. Da qui in poi, a ogni fase: prima la sessione nel repository `multimark` (se la fase tocca la libreria), push, poi nel benchmark `git submodule update --remote third_party/multimark` + commit `[P<n>] submodule: multimark → <commit>`, poi la sessione nel benchmark. I lanci sul cluster li fai con i comandi che Claude Code ti scrive nei riepiloghi di fase.
