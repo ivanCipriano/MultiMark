@@ -19,11 +19,22 @@ o commenti):
 - I pattern si sovrappongono (es. ``range(n)`` di ``k.f1`` è anche dentro ``b.f0``; ``h.f0`` è
   anche ``a.f0``): sommare i contatori dà un **limite superiore**.
 
-**Forme che entrano nella stima di capacità** (``Pattern.site_forms``): solo quelle che si possono
-trasformare nell'altra senza conoscere i tipi; le forme ambigue (``if a:`` come forma di
-``len(a) > 0``, ``s.split()`` con ``s`` di tipo ignoto, ``return c`` con ``c`` non booleano,
-``a == True``) restano fuori. TODO(ivan): confermare la scelta di ``site_forms``; la CLI riporta
-anche la stima con tutte le forme.
+**Stima di capacità: tre varianti** (decisioni di Ivan, 13 novembre 2026).
+
+- ``prudent``: solo le forme di ``Pattern.site_forms``, cioè quelle che si trasformano nell'altra
+  senza conoscere i tipi. Restano fuori ``e.f1`` (``if a:`` come forma di ``len(a) > 0``),
+  ``g.f0`` (``s.split()`` con ``s`` di tipo ignoto), ``h.f2`` (``return c``), i pattern ``p`` e
+  ``w`` e ``u`` (già canale ``aug_assign``).
+- ``all_forms``: tutte le forme, compresi ``p`` e ``w`` (senza i contatori ripetuti).
+- ``no_overlap``: le forme della variante prudente, senza doppi conteggi. Ogni occorrenza
+  «possiede» i nodi che la trasformazione riscriverebbe (come gli insiemi ``owned`` dei canali).
+  Priorità: prima i siti degli otto canali esistenti (un'occorrenza che tocca un nodo già sito non
+  conta), poi i pattern in ordine di frequenza decrescente; un nodo contato da un pattern non conta
+  per i successivi. La frequenza della classifica è quella delle occorrenze che non toccano siti
+  esistenti.
+
+``i`` ed ``r`` non possono essere canali (le due scritture danno lo stesso ``ast``) e ``u`` è già un
+canale: sono contati solo come nota e restano fuori da tutte le stime.
 """
 
 from __future__ import annotations
@@ -61,7 +72,8 @@ PATTERNS: tuple[Pattern, ...] = (
             "for i, x in enumerate(a)"), "T38", (0, 1)),
     Pattern("c", "square", ("x * x (x puro)", "x ** 2"), "T7", (0, 1)),
     Pattern("d", "not_eq", ("not a == b", "a != b"), "", (0, 1)),
-    Pattern("e", "len_test", ("len(a) == 0 / len(a) > 0", "a / not a in una condizione"), "",
+    Pattern("e", "len_test", ("len(a) == 0 / len(a) > 0, != 0, >= 1",
+            "a / not a in una condizione"), "",
             (0,), "semantica da verificare (tipo di a)"),
     Pattern("f", "slice_bound", ("a[0:n] / a[i:len(a)]", "a[:n] / a[i:]"), "T2", (0, 1)),
     Pattern("g", "str_method", ("s.split(...), s.join(...), s.strip(...) ecc.",
@@ -99,7 +111,7 @@ PATTERNS: tuple[Pattern, ...] = (
 PATTERNS_BY_NAME = {p.name: p for p in PATTERNS}
 COUNTERS: tuple[str, ...] = tuple(c for p in PATTERNS for c in p.counters)
 
-#: Metodi di ``str`` contati da ``g`` (T39). TODO(ivan): l'elenco «ecc.» è una scelta nostra.
+#: Metodi di ``str`` contati da ``g`` (T39); elenco confermato da Ivan (13 novembre 2026).
 STR_METHODS = frozenset(
     {"split", "join", "strip", "lstrip", "rstrip", "lower", "upper", "replace", "startswith",
      "endswith"}
@@ -184,12 +196,15 @@ def _add_chain(e: ast.AST) -> list:
 class _Counter:
     def __init__(self) -> None:
         self.counts = {c: 0 for c in COUNTERS}
-        self.hits: list[tuple[str, ast.AST]] = []  # (contatore, nodo) in ordine di visita
+        # (contatore, nodo, id dei nodi posseduti) in ordine di visita
+        self.hits: list[tuple[str, ast.AST, frozenset[int]]] = []
 
-    def add(self, name: str, form: int, node: ast.AST) -> None:
+    def add(self, name: str, form: int, node: ast.AST, *owned: ast.AST) -> None:
+        """Registra un'occorrenza; ``owned`` sono i nodi, oltre a ``node``, che la trasformazione
+        riscriverebbe (servono alla stima senza sovrapposizioni)."""
         key = PATTERNS_BY_NAME[name].counter(form)
         self.counts[key] += 1
-        self.hits.append((key, node))
+        self.hits.append((key, node, frozenset(id(n) for n in (node, *owned))))
 
 
 def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
@@ -204,7 +219,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
                 assert isinstance(r0, ast.Return) and isinstance(r1, ast.Return)
                 if r0.value is not None and r1.value is not None:
                     if _const(r0.value, True) and _const(r1.value, False):
-                        out.add("bool_return", 0, node)
+                        out.add("bool_return", 0, node, r0, r1)
             elif not node.orelse and isinstance(index.next_sibling(node), ast.Return):
                 out.add("else_return", 1, node)
         # i: orelse fatto di un solo If
@@ -214,9 +229,9 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
         if not node.orelse:
             inner = node.body[0] if len(node.body) == 1 else None
             if isinstance(inner, ast.If) and not inner.orelse:
-                out.add("nested_if", 0, node)
+                out.add("nested_if", 0, node, inner)
             if isinstance(node.test, ast.BoolOp) and isinstance(node.test.op, ast.And):
-                out.add("nested_if", 1, node)
+                out.add("nested_if", 1, node, node.test)
 
     if isinstance(node, (ast.If, ast.While, ast.IfExp, ast.Assert)):
         # e.f1, p.f1, w.f1: test di verità in una condizione
@@ -227,7 +242,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
                 and _simple(atom.operand)
             ):
                 for name in ("len_test", "bool_cmp", "empty_str"):
-                    out.add(name, 1, atom)
+                    out.add(name, 1, atom, *ast.iter_child_nodes(atom))
 
     if type(node) is ast.For:
         # b: range(len(a)) con a[i] / enumerate(a)
@@ -244,7 +259,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
                 for stmt in node.body
                 for n in iter_preorder(stmt)
             ):
-                out.add("range_len", 0, node)
+                out.add("range_len", 0, node, target, it, it.args[0])  # type: ignore[attr-defined]
         if (
             isinstance(target, ast.Tuple)
             and len(target.elts) == 2
@@ -252,7 +267,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
             and _call_to(it, "enumerate", 1)
             and not it.keywords  # type: ignore[attr-defined]
         ):
-            out.add("range_len", 1, node)
+            out.add("range_len", 1, node, target, it)
 
     if isinstance(node, ast.BinOp):
         # c: x * x / x ** 2
@@ -277,18 +292,20 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         # d.f0
         if _single_compare(node.operand, (ast.Eq,)):
-            out.add("not_eq", 0, node)
+            out.add("not_eq", 0, node, node.operand)
 
     if isinstance(node, ast.Compare) and len(node.ops) == 1:
         op, left, right = node.ops[0], node.left, node.comparators[0]
         if isinstance(op, ast.NotEq):
             out.add("not_eq", 1, node)
-        # e.f0, w.f2: len(a) == 0 / len(a) > 0
-        if _is_len_of(left) and _const(right, 0):
-            if isinstance(op, (ast.Eq, ast.Gt)):
-                out.add("len_test", 0, node)
-            if isinstance(op, ast.Eq):
-                out.add("empty_str", 2, node)
+        # e.f0: len(a) == 0, len(a) > 0, len(a) != 0, len(a) >= 1; w.f2: len(s) == 0
+        if _is_len_of(left) and (
+            (_const(right, 0) and isinstance(op, (ast.Eq, ast.Gt, ast.NotEq)))
+            or (_const(right, 1) and isinstance(op, ast.GtE))
+        ):
+            out.add("len_test", 0, node, left)
+        if _is_len_of(left) and _const(right, 0) and isinstance(op, ast.Eq):
+            out.add("empty_str", 2, node, left)
         # p.f0: confronti con True/False
         if isinstance(op, (ast.Eq, ast.Is)) and any(
             _const(e, True) or _const(e, False) for e in (left, right)
@@ -299,7 +316,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
             out.add("empty_str", 0, node)
         # l.f1: a in (b, c)
         if isinstance(op, ast.In) and isinstance(right, (ast.Tuple, ast.List, ast.Set)):
-            out.add("or_eq", 1, node)
+            out.add("or_eq", 1, node, right)
 
     if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice):
         sl = node.slice
@@ -312,9 +329,9 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
                 and _same(sl.upper.args[0], node.value)  # type: ignore[attr-defined]
             )
             if explicit:
-                out.add("slice_bound", 0, node)
+                out.add("slice_bound", 0, node, sl)
             elif (sl.lower is None) != (sl.upper is None):
-                out.add("slice_bound", 1, node)
+                out.add("slice_bound", 1, node, sl)
         # n.f0: sorted(a)[::-1]
         step = sl.step
         minus_one = _const(step, -1) if step is not None else False
@@ -326,14 +343,14 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
         ):
             minus_one = True
         if minus_one and sl.lower is None and sl.upper is None and _call_to(node.value, "sorted"):
-            out.add("sorted_rev", 0, node)
+            out.add("sorted_rev", 0, node, sl, node.value)
 
     if isinstance(node, ast.Call):
         func = node.func
         # g: metodi di str
         if isinstance(func, ast.Attribute) and func.attr in STR_METHODS:
             is_type_call = isinstance(func.value, ast.Name) and func.value.id == "str"
-            out.add("str_method", 1 if is_type_call else 0, node)
+            out.add("str_method", 1 if is_type_call else 0, node, func)
         # k: range(0, n) / range(n)
         if _call_to(node, "range") and not node.keywords:
             if len(node.args) == 2 and _const(node.args[0], 0):
@@ -355,7 +372,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
             and isinstance(func.value, ast.Constant)
             and isinstance(func.value.value, str)
         ):
-            out.add("str_build", 1, node)
+            out.add("str_build", 1, node, func)
         # s: d.get(k, None) / d.get(k)
         if isinstance(func, ast.Attribute) and func.attr == "get" and not node.keywords:
             if len(node.args) == 2 and _const(node.args[1], None):
@@ -375,7 +392,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
             if _const(value, None):
                 out.add("return_none", 0, node)
             if _call_to(value, "bool", 1) and not value.keywords:  # type: ignore[attr-defined]
-                out.add("bool_return", 1, node)
+                out.add("bool_return", 1, node, value)
             if isinstance(value, (ast.Compare, ast.BoolOp)) or (
                 isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not)
             ):
@@ -391,7 +408,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
                 for v in values[1:]
             )
         ):
-            out.add("or_eq", 0, node)
+            out.add("or_eq", 0, node, *values)
 
     if isinstance(node, ast.ListComp) and len(node.generators) == 1:
         # m.f0: [x for x in a]
@@ -403,7 +420,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
             and isinstance(node.elt, ast.Name)
             and node.elt.id == gen.target.id
         ):
-            out.add("identity_comp", 0, node)
+            out.add("identity_comp", 0, node, gen)
 
     if isinstance(node, ast.JoinedStr) and not isinstance(parent, ast.FormattedValue):
         out.add("str_build", 0, node)  # o.f0 (non le format spec annidate)
@@ -419,9 +436,9 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
             and not first.orelse
             and _breaks_in(node.body) == 1
         ):
-            out.add("while_break", 0, node)
+            out.add("while_break", 0, node, first, first.body[0])
         if isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not):
-            out.add("while_break", 1, node)
+            out.add("while_break", 1, node, node.test)
 
     if isinstance(node, ast.IfExp) and _single_compare(
         node.test, (ast.Gt, ast.GtE, ast.Lt, ast.LtE)
@@ -435,7 +452,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
         else:
             hit = _same(node.body, b) and _same(node.orelse, a)
         if hit:
-            out.add("max_ternary", 1, node)
+            out.add("max_ternary", 1, node, test)
 
     # u: x = x ± c / x ±= c (confronto con aug_assign)
     if isinstance(node, ast.Assign) and len(node.targets) == 1:
@@ -448,7 +465,7 @@ def _visit(node: ast.AST, index: AstIndex, out: _Counter) -> None:
             and v.left.id == t.id
             and is_numeric_constant(v.right)
         ):
-            out.add("aug_inc", 0, node)
+            out.add("aug_inc", 0, node, v)
     if (
         isinstance(node, ast.AugAssign)
         and isinstance(node.target, ast.Name)
@@ -478,7 +495,7 @@ def candidate_hits(code: str) -> list[tuple[str, int, int, str]]:
     """Occorrenze ``(contatore, riga, colonna, testo del nodo)`` ordinate per posizione (per i
     report; il testo è la prima riga del segmento di sorgente)."""
     out = []
-    for key, node in scan(AstIndex.from_code(code)).hits:
+    for key, node, _ in scan(AstIndex.from_code(code)).hits:
         lines = (ast.get_source_segment(code, node) or "").splitlines()
         text = lines[0].strip() if lines else ""
         out.append((key, getattr(node, "lineno", 0), getattr(node, "col_offset", 0), text))
@@ -491,31 +508,47 @@ ESTIMATE_KS = (3, 5, 8)
 ESTIMATE_THRESHOLDS = (8, 13)
 
 
+VARIANTS = ("prudent", "all_forms", "no_overlap")
+
+
 def sample_row(code: str) -> dict:
-    """Riga per campione: contatori, ``parse_ok`` e ``n_sites_total`` dell'inventario."""
+    """Riga per campione: contatori, ``parse_ok``, ``n_sites_total`` dell'inventario e, per la
+    variante ``no_overlap``, le occorrenze con i nodi posseduti (``_hits``) e i nodi dei siti
+    strutturali (``_site_owned``), come posizioni di visita."""
     from multimark.inventory import inventory_code
+    from multimark.sites import find_sites
 
-    counts = count_candidates(code)
-    if counts is None:
+    try:
+        index = AstIndex.from_code(code)
+    except (SyntaxError, ValueError):
         return {"parse_ok": False}
+    result = scan(index)
+    pos = index.position
+    site_owned = frozenset(pos[i] for site in find_sites(index) for i in site.owned)
+    hits = [(key, frozenset(pos[i] for i in owned)) for key, _, owned in result.hits]
     inv = inventory_code(code)
-    return {"parse_ok": True, "n_sites_total": inv["n_sites_total"], **counts}
-
-
-def estimate_counters(pattern: Pattern, all_forms: bool = False) -> tuple[str, ...]:
-    """Contatori di un pattern sommati nella stima: ``site_forms`` (prudente) o tutte le forme.
-    ``u`` (già coperto da ``aug_assign``) non entra mai."""
-    if pattern.name == "aug_inc":
-        return ()
-    if all_forms:
-        # anche i pattern senza ``site_forms``, salvo quelli non distinguibili sull'ast
-        return () if pattern.name in ("elif", "const_pow") else pattern.counters
-    return tuple(pattern.counter(i) for i in pattern.site_forms)
+    return {
+        "parse_ok": True,
+        "n_sites_total": inv["n_sites_total"],
+        **result.counts,
+        "_hits": hits,
+        "_site_owned": site_owned,
+    }
 
 
 def _duplicate_counter(pattern: Pattern, form: int) -> bool:
     """Contatori ripetuti di altri pattern (``p.f1``, ``w.f1``, ``w.f2``)."""
     return (pattern.name, form) in {("bool_cmp", 1), ("empty_str", 1), ("empty_str", 2)}
+
+
+def estimate_counters(pattern: Pattern, all_forms: bool = False) -> tuple[str, ...]:
+    """Contatori di un pattern che entrano nella stima: ``site_forms`` (prudente) o tutte le
+    forme. ``u`` (già ``aug_assign``), ``i`` e ``r`` (stesso ``ast``) non entrano mai; i contatori
+    ripetuti (``p.f1``, ``w.f1``, ``w.f2``) nemmeno."""
+    if pattern.name in ("aug_inc", "elif", "const_pow"):
+        return ()
+    forms = range(len(pattern.forms)) if all_forms else pattern.site_forms
+    return tuple(pattern.counter(i) for i in forms if not _duplicate_counter(pattern, i))
 
 
 def summarize_candidates(rows: list) -> dict:
@@ -533,33 +566,55 @@ def summarize_candidates(rows: list) -> dict:
     return out
 
 
-def rank_patterns(rows: list, all_forms: bool = False) -> list[tuple[str, int]]:
-    """Pattern ordinati per frequenza (somma dei contatori della stima), a pari merito per
-    lettera; esclusi quelli senza contatori di stima."""
+def _free_hits(row: dict, pattern: Pattern) -> int:
+    """Occorrenze (forme prudenti) del pattern che non toccano siti strutturali esistenti."""
+    counters = estimate_counters(pattern)
+    return sum(
+        1 for key, owned in row["_hits"] if key in counters and not owned & row["_site_owned"]
+    )
+
+
+def rank_patterns(rows: list, variant: str = "prudent") -> list[tuple[str, int]]:
+    """Pattern ordinati per frequenza decrescente (a pari merito, per lettera); esclusi quelli
+    senza contatori di stima. Per ``no_overlap`` la frequenza conta solo le occorrenze che non
+    toccano siti esistenti."""
+    if variant not in VARIANTS:
+        raise ValueError(f"variant must be one of {VARIANTS}: {variant!r}")
     ok = [r for r in rows if r.get("parse_ok")]
     scored = []
     for pattern in PATTERNS:
-        counters = [
-            c
-            for i, c in enumerate(pattern.counters)
-            if c in estimate_counters(pattern, all_forms) and not _duplicate_counter(pattern, i)
-        ]
-        if counters:
-            scored.append((pattern.name, sum(r[c] for r in ok for c in counters), pattern.letter))
+        counters = estimate_counters(pattern, all_forms=variant == "all_forms")
+        if not counters:
+            continue
+        if variant == "no_overlap":
+            total = sum(_free_hits(r, pattern) for r in ok)
+        else:
+            total = sum(r[c] for r in ok for c in counters)
+        scored.append((pattern.name, total, pattern.letter))
     scored.sort(key=lambda x: (-x[1], x[2]))
     return [(name, total) for name, total, _ in scored]
 
 
-def added_sites(row: dict, names: list, all_forms: bool = False) -> int:
-    """Siti in più per un campione se i pattern ``names`` diventassero canali (limite superiore:
-    le sovrapposizioni fra pattern si contano due volte)."""
-    total = 0
-    for name in names:
-        pattern = PATTERNS_BY_NAME[name]
-        for i, c in enumerate(pattern.counters):
-            if c in estimate_counters(pattern, all_forms) and not _duplicate_counter(pattern, i):
-                total += row[c]
-    return total
+def added_sites(row: dict, names: list, variant: str = "prudent") -> int:
+    """Siti in più per un campione se i pattern ``names`` (in quest'ordine) diventassero canali.
+
+    ``prudent`` e ``all_forms`` sommano i contatori (limite superiore). ``no_overlap`` assegna ogni
+    nodo al più a un sito: prima ai siti strutturali esistenti, poi ai pattern nell'ordine dato,
+    e dentro un pattern in ordine di visita."""
+    if variant == "no_overlap":
+        claimed = set(row["_site_owned"])
+        total = 0
+        for name in names:
+            counters = estimate_counters(PATTERNS_BY_NAME[name])
+            for key, owned in row["_hits"]:
+                if key in counters and not owned & claimed:
+                    total += 1
+                    claimed |= owned
+        return total
+    all_forms = variant == "all_forms"
+    return sum(
+        row[c] for name in names for c in estimate_counters(PATTERNS_BY_NAME[name], all_forms)
+    )
 
 
 def estimate(
@@ -567,7 +622,7 @@ def estimate(
     ranking: list,
     ks: tuple = ESTIMATE_KS,
     thresholds: tuple = ESTIMATE_THRESHOLDS,
-    all_forms: bool = False,
+    variant: str = "prudent",
 ) -> dict:
     """Frazione di campioni con ``n_sites_total + siti aggiunti ≥ soglia`` per i primi ``k``
     pattern della classifica (``k = 0``: siti attuali)."""
@@ -575,7 +630,7 @@ def estimate(
     out: dict = {}
     for k in (0, *ks):
         names = [name for name, _ in ranking[:k]]
-        totals = [r["n_sites_total"] + added_sites(r, names, all_forms) for r in ok]
+        totals = [r["n_sites_total"] + added_sites(r, names, variant) for r in ok]
         out[k] = {
             "patterns": names,
             **{

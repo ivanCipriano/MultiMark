@@ -195,14 +195,72 @@ def test_hits_have_positions() -> None:
 
 
 def test_estimate_counters() -> None:
-    assert estimate_counters(PATTERNS_BY_NAME["aug_inc"]) == ()
-    assert estimate_counters(PATTERNS_BY_NAME["aug_inc"], all_forms=True) == ()
-    assert estimate_counters(PATTERNS_BY_NAME["elif"], all_forms=True) == ()
+    # u (già canale), i e r (stesso ast): fuori da entrambe le stime
+    for name in ("aug_inc", "elif", "const_pow"):
+        assert estimate_counters(PATTERNS_BY_NAME[name]) == ()
+        assert estimate_counters(PATTERNS_BY_NAME[name], all_forms=True) == ()
+    # esclusioni prudenti confermate: e.f1, g.f0, h.f2, p, w
     assert estimate_counters(PATTERNS_BY_NAME["len_test"]) == ("cand_len_test_f0",)
+    assert estimate_counters(PATTERNS_BY_NAME["str_method"]) == ("cand_str_method_f1",)
+    assert estimate_counters(PATTERNS_BY_NAME["bool_return"]) == (
+        "cand_bool_return_f0",
+        "cand_bool_return_f1",
+    )
+    assert estimate_counters(PATTERNS_BY_NAME["bool_cmp"]) == ()
+    assert estimate_counters(PATTERNS_BY_NAME["empty_str"]) == ()
+    # tutte le forme, senza i contatori ripetuti (p.f1, w.f1, w.f2)
     assert estimate_counters(PATTERNS_BY_NAME["len_test"], all_forms=True) == (
         "cand_len_test_f0",
         "cand_len_test_f1",
     )
+    assert estimate_counters(PATTERNS_BY_NAME["bool_cmp"], all_forms=True) == ("cand_bool_cmp_f0",)
+    assert estimate_counters(PATTERNS_BY_NAME["empty_str"], all_forms=True) == (
+        "cand_empty_str_f0",
+    )
+
+
+def test_len_test_extended_forms() -> None:
+    assert counts("def f(a):\n    return len(a) != 0, len(a) >= 1\n")["cand_len_test_f0"] == 2
+    # w.f2 resta solo len(s) == 0
+    assert counts("def f(a):\n    return len(a) != 0, len(a) >= 1\n")["cand_empty_str_f2"] == 0
+
+
+def _added(code: str, names: list, variant: str) -> int:
+    return added_sites(sample_row(src(code)), names, variant)
+
+
+def test_no_overlap_existing_sites_win() -> None:
+    # `a != 1` è un sito equality_dir: d.f1 non conta senza sovrapposizioni
+    code = "def f(a):\n    return a != 1\n"
+    assert _added(code, ["not_eq"], "prudent") == 1
+    assert _added(code, ["not_eq"], "no_overlap") == 0
+    # `len(a) > 0` è un sito compare_dir: e.f0 non conta
+    assert _added("def f(a):\n    return len(a) > 0\n", ["len_test"], "no_overlap") == 0
+    # `a != b` (stesso kind) non è un sito: d.f1 conta
+    assert _added("def f(a, b):\n    return a != b\n", ["not_eq"], "no_overlap") == 1
+
+
+def test_no_overlap_between_patterns_follows_order() -> None:
+    loop = "def f(a):\n    for i in range(len(a)):\n        print(a[i])\n"
+    assert _added(loop, ["range_len", "range_zero"], "prudent") == 2
+    assert _added(loop, ["range_len", "range_zero"], "no_overlap") == 1
+    assert _added(loop, ["range_zero", "range_len"], "no_overlap") == 1
+    both = "def f(c):\n    if c:\n        return True\n    else:\n        return False\n"
+    assert _added(both, ["else_return", "bool_return"], "prudent") == 2
+    assert _added(both, ["else_return", "bool_return"], "no_overlap") == 1
+    # occorrenze indipendenti nello stesso campione contano tutte
+    two = "def f(n, m):\n    return range(0, n), range(0, m)\n"
+    assert _added(two, ["range_zero"], "no_overlap") == 2
+
+
+def test_rank_no_overlap_ignores_hits_on_sites() -> None:
+    rows = [sample_row("def f(a, b):\n    return a != 1, a != 2, a != b, range(0, 3)\n")]
+    assert dict(rank_patterns(rows))["not_eq"] == 3
+    ranking = rank_patterns(rows, "no_overlap")
+    assert dict(ranking)["not_eq"] == 1
+    assert ranking[0] == ("not_eq", 1) and ranking[1] == ("range_zero", 1)  # d < k
+    with pytest.raises(ValueError):
+        rank_patterns(rows, "nope")
 
 
 def _rows() -> list:
@@ -233,6 +291,9 @@ def test_ranking_and_estimate() -> None:
     assert est[1] == {"patterns": ["slice_bound"], "frac_ge_1": 0.5, "frac_ge_3": 0.0}
     assert est[2] == {"patterns": ["slice_bound", "range_zero"], "frac_ge_1": 1.0, "frac_ge_3": 0.5}
     assert math.isnan(estimate([], [], ks=(), thresholds=(8,))[0]["frac_ge_8"])
+    est_no = estimate(rows, rank_patterns(rows, "no_overlap"), ks=(2,), thresholds=(3,),
+                      variant="no_overlap")  # fmt: skip
+    assert est_no[2]["frac_ge_3"] == 0.5
 
 
 def test_cli(tmp_path: Path) -> None:
@@ -252,6 +313,12 @@ def test_cli(tmp_path: Path) -> None:
     text = summary.read_text(encoding="utf-8")
     assert "== group canonical" in text and "== group qwen" in text
     assert "ranking prudent" in text and "estimate all_forms, group qwen" in text
+    assert "ranking no_overlap" in text and "estimate no_overlap, group canonical" in text
+    assert set(json.loads(js.read_text(encoding="utf-8"))["estimate"]) == {
+        "prudent",
+        "all_forms",
+        "no_overlap",
+    }
     data = json.loads(js.read_text(encoding="utf-8"))
     assert data["groups"]["canonical"]["counters"]["cand_range_zero_f0"]["total"] == 1
     assert set(data["estimate"]["prudent"]["groups"]) == {"canonical", "qwen"}
