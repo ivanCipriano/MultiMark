@@ -164,7 +164,7 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
     tree = ast.parse(code, type_comments=False)
     index0 = AstIndex(tree)
     layout0 = build_layout(index0, cfg, key)
-    cw = encode(bits, cfg.t)
+    cw = encode(bits, cfg.t, cfg.code_matrix)
     b = cfg.codeword_length
     n_bits = layout0.n_bits
     by_channel = {c: 0 for c in CHANNELS}

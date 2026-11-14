@@ -1,0 +1,22 @@
+P1 check of the compact-code matrices (python -m multimark.cli.codec_matrices)
+library 0.0.1; python 3.9.25; message_bits=24 t=2 B=32; exact for f <= 5, 1000000 samples above
+f = erasures chosen uniformly among the B positions; e = 1 wrong vote in one of the B - f remaining positions
+
+matrix random: sha256 b671eb3e8cb7832152c5d08b794f10d5579d607babd016072a371b77065e259c; minimum distance 2
+matrix dmin4: sha256 37732f1e4421fc6ec83a732397eb4892a4293be0bab4b000014795160cadb333; minimum distance 4
+
+| f | method | P(unique) random | P(unique) dmin4 | P(wrong, e=1) random | P(wrong, e=1) dmin4 |
+|---|---|---|---|---|---|
+| 0 | exact | 1.000000 | 1.000000 | 0.000000 | 0.000000 |
+| 1 | exact | 1.000000 | 1.000000 | 0.002016 | 0.000000 |
+| 2 | exact | 0.997984 | 1.000000 | 0.007258 | 0.000000 |
+| 3 | exact | 0.990726 | 1.000000 | 0.019452 | 0.007898 |
+| 4 | exact | 0.971274 | 0.992102 | 0.045632 | 0.031591 |
+| 5 | exact | 0.925642 | 0.960512 | 0.097553 | 0.084926 |
+| 6 | 1000000 samples | 0.827813 | 0.875364 | 0.188128 | 0.185094 |
+| 7 | 1000000 samples | 0.639443 | 0.689922 | 0.307571 | 0.323088 |
+| 8 | 1000000 samples | 0.332244 | 0.366152 | 0.332244 | 0.366152 |
+
+adoption criterion: P(unique) of dmin4 not lower than random by more than 0.02 at f in (4, 5)
+decision: dmin4 is the multimark base
+wall time 51 s

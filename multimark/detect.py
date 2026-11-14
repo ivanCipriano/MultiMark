@@ -175,7 +175,7 @@ def detect(
         s = binom_tail_score(n, int(round(a))) if uniform else normal_tail_score(a, total_w)
         return a, s
 
-    a1, score1 = score_of(encode(exp, cfg.t))
+    a1, score1 = score_of(encode(exp, cfg.t, cfg.code_matrix))
     extra["agreement"] = a1
     for size in registry_sizes:
         if size == 1:
@@ -183,7 +183,7 @@ def detect(
         if seed is None:
             raise ValueError("registry_seed is required for registry sizes > 1")
         cands = [exp, *registry_decoys(seed, method, size - 1, exp, cfg.message_bits)]
-        scored = [(score_of(encode(m, cfg.t)), i) for i, m in enumerate(cands)]
+        scored = [(score_of(encode(m, cfg.t, cfg.code_matrix)), i) for i, m in enumerate(cands)]
         (a_best, s_best), i_best = max(scored, key=lambda x: (x[0][0], -x[1]))
         extra[f"score_nreg{size}"] = s_best
         extra[f"best_nreg{size}"] = bits_str(cands[i_best])
@@ -193,7 +193,7 @@ def detect(
 
     # decodifica aperta
     tally = _majority(votes, layout.b)
-    decoded, status = decode_erasures(tally, cfg.message_bits, cfg.t)
+    decoded, status = decode_erasures(tally, cfg.message_bits, cfg.t, cfg.code_matrix)
     if decoded is not None:
         bits_correct = sum(1 for d, e in zip(decoded, exp) if d == e)
     else:

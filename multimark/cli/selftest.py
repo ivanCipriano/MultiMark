@@ -126,7 +126,7 @@ def run_case(task: tuple[str, int, int]) -> dict[str, Any]:
     wrong = r.extra["n_names_wrong"]
     layout = build_layout(AstIndex.from_code(r.code), cfg, key)
     tally = _majority(read_votes(layout, key, cfg), cfg.codeword_length)
-    cw = encode(msg, cfg.t)
+    cw = encode(msg, cfg.t, cfg.code_matrix)
     n_erased = sum(v == ERASURE for v in tally)
     n_errors = sum(v != ERASURE and v != c for v, c in zip(tally, cw))
     n_covered = len({i for s in layout.slots for i in s.indices})
@@ -141,7 +141,7 @@ def run_case(task: tuple[str, int, int]) -> dict[str, Any]:
         no_candidate=r.extra["n_names_no_candidate"],
         n_erased=n_erased,
         n_errors=n_errors,
-        within_limit=2 * n_errors + n_erased <= 2 * cfg.t,
+        within_limit=n_errors + n_erased <= 3,
         agreement_ok=d.extra["agreement"] == n_votes - wrong,
         big=r.extra["n_sites"] >= cfg.codeword_length,
         covered=covered,
@@ -175,18 +175,22 @@ def timing(repeats: int = 5) -> dict[str, float]:
     return out
 
 
-def limit_lines(ok: list[dict[str, Any]], t: int) -> list[str]:
-    """Messaggi sbagliati rispetto al limite ``2e + f <= 2t`` (``e`` bit sbagliati, ``f`` bit
-    cancellati all'ingresso del decodificatore)."""
-    inside = [r for r in ok if r["within_limit"]]
-    outside = [r for r in ok if not r["within_limit"]]
-    out = []
-    for label, rs in ((f"2e + f <= 2t = {2 * t}", inside), (f"2e + f > {2 * t}", outside)):
+def limit_lines(ok: list[dict[str, Any]], matrix: str) -> list[str]:
+    """Messaggi sbagliati per fascia (``e`` bit sbagliati, ``f`` bit cancellati all'ingresso del
+    decodificatore; §3.8 [v1.2.2]): con ``e = 0`` mai (entrambe le matrici); con ``e + f <= 3`` mai
+    (solo ``dmin4``); oltre si riporta il tasso."""
+    bands = (
+        ("e = 0", [r for r in ok if r["n_errors"] == 0], True),
+        ("e > 0, e + f <= 3", [r for r in ok if r["n_errors"] > 0 and r["within_limit"]],
+         matrix == "dmin4"),
+        ("e > 0, e + f > 3", [r for r in ok if r["n_errors"] > 0 and not r["within_limit"]], False),
+    )  # fmt: skip
+    out = [f"wrong decoded messages by band (code.matrix = {matrix}):"]
+    for label, rs, guaranteed in bands:
         bad = sum(r["decoded_wrong"] for r in rs)
-        with_e = [r for r in rs if r["n_errors"] > 0]
         rate = f"{bad / len(rs):.4f}" if rs else "n/a"
-        out.append(f"  {label}: {len(rs)} cases ({len(with_e)} with e > 0); wrong decoded "
-                   f"{bad} (rate {rate})")  # fmt: skip
+        must = " (must be 0)" if guaranteed else ""
+        out.append(f"  {label}: {len(rs)} cases; wrong decoded {bad}{must} (rate {rate})")
     return out
 
 
@@ -238,7 +242,7 @@ def summarize(results: list[dict[str, Any]], args: argparse.Namespace, secs: flo
             f"(with no wrong name vote: "
             f"{sum(r['decoded_wrong'] for r in ok if r['wrong_names'] == 0)}; with wrong name "
             f"votes: {sum(r['decoded_wrong'] for r in ok if r['wrong_names'] > 0)})",
-            *limit_lines(ok, PROFILES[profile].t),
+            *limit_lines(ok, PROFILES[profile].code_matrix),
         ]
         lines += coverage_lines(ok, PROFILES[profile].codeword_length)
         inv: dict[str, Counter] = {}

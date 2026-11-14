@@ -10,6 +10,7 @@ from dataclasses import dataclass, replace
 from typing import Optional
 
 from multimark.channels import CANONICAL_MODES, CHANNEL_SET_NAMES, ReadOptions
+from multimark.codec import MATRICES
 from multimark.linking import LINKING_MODES
 from multimark.names import NAME_VARIANTS
 
@@ -35,6 +36,9 @@ class Config:
     names_module_level: bool = False
     # [v1.2] canali strutturali: ``extended`` (1–14, base) o ``mcss8`` (1–8)
     channels: str = "extended"
+    # [v1.2.2] matrice del codice compatto (§3.8, MD18): ``dmin4`` per la base (ha passato il
+    # controllo di §3.8, log P1_codec_matrices.txt), ``random`` per ``mcss``
+    code_matrix: str = "dmin4"
     voting: str = "simple"
     channel_weights: Optional[str] = None
     registry_seed: Optional[int] = None
@@ -49,6 +53,7 @@ class Config:
             ("names.proposer", self.names_proposer, PROPOSERS),
             ("voting", self.voting, VOTING_MODES),
             ("channels", self.channels, CHANNEL_SET_NAMES),
+            ("code.matrix", self.code_matrix, MATRICES),
         )
         for name, value, allowed in checks:
             if value not in allowed:
@@ -86,4 +91,5 @@ def mcss_profile() -> Config:
         names_include_params=True,
         names_module_level=True,
         channels="mcss8",
+        code_matrix="random",
     )

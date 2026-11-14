@@ -18,6 +18,7 @@ dev = ["pytest", "hypothesis", "ruff", "mypy<1.16", "black"]
 multimark-inventory = "multimark.cli.inventory:main"
 multimark-candidates = "multimark.cli.candidates:main"
 multimark-selftest = "multimark.cli.selftest:main"
+multimark-codec-matrices = "multimark.cli.codec_matrices:main"
 
 [tool.setuptools.packages.find]
 include = ["multimark*"]

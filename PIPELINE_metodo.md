@@ -1,7 +1,7 @@
 # PIPELINE_metodo.md — MultiMark: watermark multi-bit post-hoc per Python nel benchmark wm-bench
 
 > **Destinatario:** Claude Code. **Natura:** specifica vincolante di implementazione. In caso di ambiguità, fermati e chiedi a Ivan; non reinterpretare.
-> **Versione:** 1.2.1, 13 novembre 2026 (sera: regola di scope per i nomi nuovi, `else_return` forma 0 solo in coda al blocco, MD15–MD17 accettate) (dopo l'inventario di P0: canali nuovi 9–14, variabili di modulo, criteri di P2 rivisti, autovalidazione `mcss` rivista, rilevazione aggregata; le modifiche rispetto alla 1.1 sono marcate «**[v1.2]**»). **Repository:** `multimark` (libreria del metodo, questo file sta nella sua radice) e `wm-bench` (benchmark, commit di partenza `a64f4ea`, ramo `posthoc-multimark`), vedi §0.4.
+> **Versione:** 1.2.2, 14 novembre 2026 (matrice `dmin4` per `multimark`, §3.8; v1.2.1 del 13 sera: regola di scope per i nomi nuovi, `else_return` forma 0 solo in coda al blocco, MD15–MD17 accettate) (dopo l'inventario di P0: canali nuovi 9–14, variabili di modulo, criteri di P2 rivisti, autovalidazione `mcss` rivista, rilevazione aggregata; le modifiche rispetto alla 1.1 sono marcate «**[v1.2]**»). **Repository:** `multimark` (libreria del metodo, questo file sta nella sua radice) e `wm-bench` (benchmark, commit di partenza `a64f4ea`, ramo `posthoc-multimark`), vedi §0.4.
 > **Convenzioni:** prosa, docstring e commenti in italiano; identificatori, nomi di file, chiavi di configurazione e log in inglese (CLAUDE.md del benchmark). Le pagine di MCSS sono quelle del PDF arXiv 2607.06009v1.
 
 ---
@@ -414,6 +414,8 @@ Con V1 ogni sito occupa 2 posizioni consecutive di `phi` (come MCSS, Alg. 1 riga
 - Codice sistematico lineare su GF(2): `cw = m ∥ p`, `p = m · P` con `P` matrice `message_bits × 4t` a elementi casuali generati da `random.Random(int.from_bytes(sha256(b"posthoc-compact-code-v1").digest()[:8], "big"))`, fissata nel codice e nel test (valore di controllo del suo hash). `t = 2` → `B = message_bits + 8`.
 - Decodifica per sole cancellazioni (Teorema 5.2 di MCSS, p. 7): i bit decisi dal voto formano il vettore noto; per le posizioni cancellate si risolve `H · cw = 0` con eliminazione di Gauss su GF(2) (`H = [Pᵀ | I]`); soluzione unica → messaggio; nessuna soluzione o più soluzioni → `decode_status ∈ {inconsistent, ambiguous}`. Nessuna correzione di errori (non prevista dal codice compatto del paper).
 - Deviazione dichiarata: la matrice del paper non è nota (seme SHA-256 non pubblicato, p. 3); la nostra ha la stessa costruzione e un seme nostro.
+- **[v1.2.2] Matrice per profilo (MD18).** `mcss`: matrice casuale come sopra (fedeltà: il paper la dichiara «random by construction», p. 3). `multimark`: `code.matrix = dmin4`, matrice con **distanza minima 4** (il massimo possibile per un codice binario [32, 24]: d = 5 violerebbe il limite di Hamming, 1 + 32 + 496 = 529 > 2^8). Costruzione (codice di Hamming esteso accorciato): le 24 righe di `P` sono 24 vettori di 8 bit **distinti, di peso dispari e ≥ 3** (ce ne sono 120), estratti con `random.Random(int.from_bytes(sha256(b"multimark-compact-code-dmin4-v1").digest()[:8], "big")).sample(...)` dalla lista ordinata; valore di controllo dell'hash nel test. Garanzie, da fissare con test: con f ≤ 3 cancellazioni la decodifica riesce sempre; con e + f ≤ 3 (e = voti sbagliati, f = cancellazioni, in bit) non esce mai un messaggio sbagliato; con e = 0 non esce mai un messaggio sbagliato (vale per entrambe le matrici). Oltre questi limiti si riportano i tassi.
+- **[v1.2.2] Controllo prima di adottare `dmin4`:** per entrambe le matrici, calcolo esatto (enumerazione per f ≤ 5, 10⁶ campioni per 6 ≤ f ≤ 8) della probabilità di decodifica unica con f cancellazioni scelte a caso e della probabilità di messaggio sbagliato con e = 1 ed f cancellazioni. `dmin4` diventa la base di `multimark` se a f = 4 e f = 5 la probabilità di decodifica unica non è inferiore di oltre 0,02 a quella della matrice casuale; altrimenti si tiene la casuale e `dmin4` resta un punto dell'ablazione. Tabella nel log `P1_codec_matrices.txt` e nella tesi (T4.3).
 
 ### 3.9 Inserimento (pseudocodice)
 
@@ -510,6 +512,7 @@ def detect(code, m_expected, K, cfg, registry_sizes=(1, 16, 1024)):
 | `names.include_params` | bool | `false` | `true` (non specificato dal paper: §4.2 punto 8) |
 | `channels` **[v1.2]** | `mcss8`, `extended`, `extended+str` | `extended` | `mcss8` |
 | `names.module_level` **[v1.2]** | bool | decisione O (§7); `false` fino ad allora | `true` |
+| `code.matrix` **[v1.2.2]** | `random`, `dmin4` | `dmin4` (se passa il controllo di §3.8) | `random` |
 | `voting` | `simple`, `weighted`, `weighted_erasure` | `simple` | `simple` |
 | `channel_weights` | file JSON (solo `weighted*`) | — | — |
 

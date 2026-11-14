@@ -215,7 +215,7 @@ def test_detect_votes_match_codeword_positions() -> None:
     cfg = multimark_base()
     r = embed(RICH, m, 99, cfg)
     d = detect(r.code, m, 99, cfg, registry_seed=1)
-    cw = encode(m, cfg.t)
+    cw = encode(m, cfg.t, cfg.code_matrix)
     assert len(cw) == 32
     records = d.extra["sites"]
     assert all(len(rec) == 6 for rec in records)

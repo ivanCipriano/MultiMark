@@ -1,4 +1,5 @@
-"""I numeri di ``docs/reports/P1_esempi.md`` (tre esempi, chiave 20261116, messaggio «gpt4»).
+"""I numeri di ``docs/reports/P1_esempi.md`` (tre esempi, chiave 20261711, messaggio «gpt4»,
+matrice ``dmin4`` della base, §3.8 [v1.2.2]).
 
 Se un test fallisce, l'inserimento o la rilevazione sono cambiati: il report va rigenerato e
 riletto.
@@ -11,7 +12,7 @@ from multimark.config import multimark_base
 from multimark.detect import detect
 from multimark.embed import embed
 
-KEY = 20261116
+KEY = 20261711
 MSG = text_to_bits("gpt4")
 
 # Codice identico a quello del report.
@@ -79,18 +80,19 @@ def test_example_1() -> None:
     assert (r.status, r.extra["n_sites"], r.extra["skipped_sites"], r.extra["n_renamed"]) == (
         "PARTIAL", 4, 0, 1,
     )  # fmt: skip
-    assert "        return\n    else:\n" in r.code and "maxlen_value" in r.code
+    assert "        return\n    else:\n" in r.code and "maxlen_count == len(s)" in r.code
     assert (d.extra["agreement"], d.extra["n_votes"]) == (4, 4)
-    assert round(d.score, 2) == 1.20 and d.extra["n_erasures"] == 29
+    assert round(d.score, 2) == 1.20 and d.extra["n_erasures"] == 28
 
 
 def test_example_2() -> None:
     r, d = _run(E2)
     assert (r.status, r.extra["n_sites"], r.extra["skipped_sites"], r.extra["n_renamed"]) == (
-        "PARTIAL", 10, 0, 3,
+        "PARTIAL", 10, 0, 1,
     )  # fmt: skip
     for fragment in ("range(len(values) - width + 1)", "samples[:len(samples)]",
-                     "sample_value ** 2  # potenza istantanea", "if x != None and lo < hi:"):  # fmt: skip
+                     "sample ** 2  # potenza istantanea", "if x is not None and lo < hi:",
+                     "result = []"):  # fmt: skip
         assert fragment in r.code
     assert (d.extra["agreement"], d.extra["n_votes"]) == (10, 10)
     assert round(d.score, 2) == 3.01
@@ -99,7 +101,8 @@ def test_example_2() -> None:
 def test_example_3() -> None:
     r, d = _run(E3)
     assert (r.status, r.extra["n_sites"], r.extra["skipped_sites"]) == ("PARTIAL", 9, 1)
-    assert "if flag: picked_val = [u for u in result]" in r.code
+    assert "if flag: picked = [u for u in output]" in r.code and "return evens[0:1]" in r.code
     assert (d.extra["agreement"], d.extra["n_votes"]) == (8, 9)
-    assert round(d.score, 2) == 1.71 and round(d.extra["score_nreg16"], 2) == 2.71
-    assert d.extra["best_nreg16"] != "".join(map(str, MSG))
+    assert round(d.score, 2) == 1.71 and round(d.extra["score_nreg16"], 2) == 1.71
+    assert round(d.extra["score_nreg1024"], 2) == 2.71
+    assert d.extra["best_nreg1024"] != "".join(map(str, MSG))
