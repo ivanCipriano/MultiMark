@@ -33,6 +33,8 @@ from multimark.codec import encode
 from multimark.config import Config
 from multimark.layout import Layout, Slot, build_layout, name_value
 from multimark.names import (
+    BASE_CANDIDATES,
+    MAX_CANDIDATES,
     Proposer,
     StaticProposer,
     first_binding_value,
@@ -107,9 +109,11 @@ def _choose_name(
         if good(name):
             return _NameChoice(None)
         func = site.unit.name
-        for cand in proposer.propose(code, func, name, k=8):
-            if valid_new_name(cand, name, used) and good(cand):
-                return _NameChoice(cand)
+        # Prima i primi 8 candidati (§3.6.4); se nessuno ha il bit giusto, fino a 32.
+        for k in (BASE_CANDIDATES, MAX_CANDIDATES):
+            for cand in proposer.propose(code, func, name, k=k):
+                if valid_new_name(cand, name, used) and good(cand):
+                    return _NameChoice(cand)
         return _NameChoice(None, "no_candidate")
     # V1 (2 bit di stile) e V1b (snake/camel)
     if variant == "V1":

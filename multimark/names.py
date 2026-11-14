@@ -488,6 +488,15 @@ class Proposer(Protocol):
 
 SUFFIXES = ("value", "val", "item", "list", "count", "idx", "tmp", "res")
 PREFIXES = ("cur_", "new_", "the_")
+#: Suffissi aggiuntivi, usati solo quando si chiedono più di ``BASE_CANDIDATES`` candidati (cioè
+#: quando nessuno dei primi ha il bit giusto; l'inserimento chiede allora ``MAX_CANDIDATES``).
+#: TODO(ivan): lista scelta da Claude Code (suffissi comuni nel codice), non fissata dalla pipeline.
+EXTRA_SUFFIXES = (
+    "data", "num", "obj", "out", "buf", "acc", "elem", "key", "ref", "part", "size", "info",
+    "entry", "seq", "set", "map", "arr", "str", "var", "cur", "next", "prev", "total", "new",
+)  # fmt: skip
+BASE_CANDIDATES = 8
+MAX_CANDIDATES = 32
 
 
 @lru_cache(maxsize=1)
@@ -500,7 +509,8 @@ def synonyms() -> dict[str, tuple[str, ...]]:
 
 class StaticProposer:
     """Ripiego non neurale (§3.6.4). Candidati, in quest'ordine: (1) sinonimi di ``norm(n)`` dal
-    dizionario fisso; (2) ``norm(n) + "_" + suffisso``; (3) prefisso + ``norm(n)``. Restituisce i
+    dizionario fisso; (2) ``norm(n) + "_" + suffisso``; (3) prefisso + ``norm(n)``; (4) solo con
+    ``k > BASE_CANDIDATES``, ``norm(n) + "_" + suffisso`` con ``EXTRA_SUFFIXES``. Restituisce i
     primi ``k`` candidati validi (§3.6.4) rispetto ai nomi delle funzioni ``function_name`` del
     codice (per ``function_name == ""``, la variabile di modulo: tutti i nomi del modulo); il
     controllo completo di scope lo rifà l'inserimento."""
@@ -509,6 +519,8 @@ class StaticProposer:
         base = normalize_name(var_name)
         raw = [*synonyms().get(base, ()), *(f"{base}_{s}" for s in SUFFIXES),
                *(f"{p}{base}" for p in PREFIXES)]  # fmt: skip
+        if k > BASE_CANDIDATES:
+            raw += [f"{base}_{s}" for s in EXTRA_SUFFIXES]
         used = _scope_identifiers(ast.parse(code), function_name)
         out: list[str] = []
         for cand in raw:

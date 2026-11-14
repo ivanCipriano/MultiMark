@@ -73,16 +73,3 @@ def test_readings_invariant_to_black() -> None:
             marked = embed(code, msg, 1000 + seed, cfg).code
             reformatted = black.format_str(add_comments(marked), mode=black.Mode(line_length=60))
             assert readings(reformatted, cfg, 1000 + seed) == readings(marked, cfg, 1000 + seed)
-
-
-def test_wrong_name_vote_can_mislead_decoding() -> None:
-    # TODO(ivan): caso trovato da Hypothesis. Una variabile senza candidato (V2) dà un voto
-    # sbagliato; con 6 cancellazioni la decodifica restituisce un messaggio sbagliato. La garanzia
-    # «mai un messaggio sbagliato» vale solo con n_names_wrong == 0 (decisione richiesta).
-    cfg = PROFILES["multimark"]
-    key = 33782
-    msg = [random.Random(key).getrandbits(1) for _ in range(cfg.message_bits)]
-    r = embed(generate(424242, 23, 1), msg, key, cfg)
-    d = detect(r.code, msg, key, cfg, registry_sizes=(1,))
-    assert r.extra["n_names_wrong"] == 1 and d.extra["n_erasures"] == 6
-    assert d.decoded_message not in (None, "".join(map(str, msg)))

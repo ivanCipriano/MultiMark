@@ -12,6 +12,8 @@ import pytest
 
 from multimark._astindex import AstIndex
 from multimark.names import (
+    EXTRA_SUFFIXES,
+    MAX_CANDIDATES,
     PREFIXES,
     SUFFIXES,
     StaticProposer,
@@ -135,9 +137,12 @@ def test_static_proposer_order_and_validity() -> None:
 
 def test_static_proposer_without_synonyms_uses_suffixes_then_prefixes() -> None:
     code = "def f():\n    zorblax = 1\n    return zorblax\n"
-    got = StaticProposer().propose(code, "f", "zorblax", k=20)
     expected = [f"zorblax_{s}" for s in SUFFIXES] + [f"{p}zorblax" for p in PREFIXES]
-    assert got == expected
+    assert StaticProposer().propose(code, "f", "zorblax", k=8) == expected[:8]
+    got = StaticProposer().propose(code, "f", "zorblax", k=MAX_CANDIDATES)
+    assert got[: len(expected)] == expected
+    assert got[len(expected) :] == [f"zorblax_{s}" for s in EXTRA_SUFFIXES][: MAX_CANDIDATES - 11]
+    assert len(got) == MAX_CANDIDATES
 
 
 def test_static_proposer_normalizes_camel_case() -> None:

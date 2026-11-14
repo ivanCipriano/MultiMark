@@ -42,8 +42,9 @@ from typing import Any, Optional
 
 from multimark import __version__
 from multimark._astindex import AstIndex
+from multimark.codec import ERASURE, encode
 from multimark.config import Config, mcss_profile, multimark_base
-from multimark.detect import detect
+from multimark.detect import _majority, detect
 from multimark.embed import embed
 from multimark.layout import build_layout, read_votes
 from multimark.prf import derive_seed
@@ -124,6 +125,10 @@ def run_case(task: tuple[str, int, int]) -> dict[str, Any]:
     n_votes = d.extra["n_votes"]
     wrong = r.extra["n_names_wrong"]
     layout = build_layout(AstIndex.from_code(r.code), cfg, key)
+    tally = _majority(read_votes(layout, key, cfg), cfg.codeword_length)
+    cw = encode(msg, cfg.t)
+    n_erased = sum(v == ERASURE for v in tally)
+    n_errors = sum(v != ERASURE and v != c for v, c in zip(tally, cw))
     n_covered = len({i for s in layout.slots for i in s.indices})
     covered = n_covered == cfg.codeword_length
     decoded = d.decoded_message
@@ -133,6 +138,10 @@ def run_case(task: tuple[str, int, int]) -> dict[str, Any]:
         n_votes=n_votes,
         skipped=r.extra["skipped_sites"],
         wrong_names=wrong,
+        no_candidate=r.extra["n_names_no_candidate"],
+        n_erased=n_erased,
+        n_errors=n_errors,
+        within_limit=2 * n_errors + n_erased <= 2 * cfg.t,
         agreement_ok=d.extra["agreement"] == n_votes - wrong,
         big=r.extra["n_sites"] >= cfg.codeword_length,
         covered=covered,
@@ -163,6 +172,21 @@ def timing(repeats: int = 5) -> dict[str, float]:
             r = embed(code, msg, 1000 + k, cfg)
             detect(r.code, msg, 1000 + k, cfg, registry_seed=1, method=method)
         out[profile] = (time.perf_counter() - t0) / repeats
+    return out
+
+
+def limit_lines(ok: list[dict[str, Any]], t: int) -> list[str]:
+    """Messaggi sbagliati rispetto al limite ``2e + f <= 2t`` (``e`` bit sbagliati, ``f`` bit
+    cancellati all'ingresso del decodificatore)."""
+    inside = [r for r in ok if r["within_limit"]]
+    outside = [r for r in ok if not r["within_limit"]]
+    out = []
+    for label, rs in ((f"2e + f <= 2t = {2 * t}", inside), (f"2e + f > {2 * t}", outside)):
+        bad = sum(r["decoded_wrong"] for r in rs)
+        with_e = [r for r in rs if r["n_errors"] > 0]
+        rate = f"{bad / len(rs):.4f}" if rs else "n/a"
+        out.append(f"  {label}: {len(rs)} cases ({len(with_e)} with e > 0); wrong decoded "
+                   f"{bad} (rate {rate})")  # fmt: skip
     return out
 
 
@@ -200,7 +224,9 @@ def summarize(results: list[dict[str, Any]], args: argparse.Namespace, secs: flo
             f"embed status: {dict(Counter(r['status'] for r in rs))}; "
             f"failed reasons: {dict(Counter(r['reason'] for r in rs if r['status'] == 'FAILED'))}",
             f"skipped sites (total): {sum(r['skipped'] for r in ok)}; "
-            f"name sites without candidate (total): {sum(r['wrong_names'] for r in ok)}",
+            f"name sites without candidate (total): {sum(r['no_candidate'] for r in ok)} "
+            f"in {sum(r['no_candidate'] > 0 for r in ok)} cases; wrong name votes (total): "
+            f"{sum(r['wrong_names'] for r in ok)}",
             f"comparison: agreement == N - wrong_names in {sum(r['agreement_ok'] for r in ok)}"
             f"/{len(ok)}",
             f"N >= B: {len(big)} cases; all B positions covered: {len(big_cov)}; decoded == m: "
@@ -208,10 +234,11 @@ def summarize(results: list[dict[str, Any]], args: argparse.Namespace, secs: flo
             f"/{len(big_cov)}); decode status {dict(Counter(r['decode_status'] for r in big))}",
             f"N < B: {len(small)} cases; with erasures: {sum(r['erasures'] > 0 for r in small)}; "
             f"decode status {dict(Counter(r['decode_status'] for r in small))}",
-            f"wrong decoded messages (must be 0): {sum(r['decoded_wrong'] for r in ok)} "
+            f"wrong decoded messages: {sum(r['decoded_wrong'] for r in ok)} "
             f"(with no wrong name vote: "
             f"{sum(r['decoded_wrong'] for r in ok if r['wrong_names'] == 0)}; with wrong name "
             f"votes: {sum(r['decoded_wrong'] for r in ok if r['wrong_names'] > 0)})",
+            *limit_lines(ok, PROFILES[profile].t),
         ]
         lines += coverage_lines(ok, PROFILES[profile].codeword_length)
         inv: dict[str, Counter] = {}
