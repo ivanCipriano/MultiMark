@@ -490,10 +490,10 @@ SUFFIXES = ("value", "val", "item", "list", "count", "idx", "tmp", "res")
 PREFIXES = ("cur_", "new_", "the_")
 #: Suffissi aggiuntivi, usati solo quando si chiedono più di ``BASE_CANDIDATES`` candidati (cioè
 #: quando nessuno dei primi ha il bit giusto; l'inserimento chiede allora ``MAX_CANDIDATES``).
-#: TODO(ivan): lista scelta da Claude Code (suffissi comuni nel codice), non fissata dalla pipeline.
+#: Lista di §3.6.4 [v1.2.3] (nessun suffisso che indichi un tipo).
 EXTRA_SUFFIXES = (
     "data", "num", "obj", "out", "buf", "acc", "elem", "key", "ref", "part", "size", "info",
-    "entry", "seq", "set", "map", "arr", "str", "var", "cur", "next", "prev", "total", "new",
+    "entry", "seq", "base", "step", "last", "orig", "var", "cur", "next", "prev", "total", "new",
 )  # fmt: skip
 BASE_CANDIDATES = 8
 MAX_CANDIDATES = 32
