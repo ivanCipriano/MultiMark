@@ -9,6 +9,9 @@ Per ``--fragments`` frammenti sintetici (``multimark.synthetic``) e ``--keys`` c
   voto (con ``linking=positional`` è garantito; con il legame per funzione no, e allora le
   posizioni senza voto sono cancellazioni recuperabili fino a ``4t``); non restituisce **mai** un
   messaggio sbagliato. Con ``N < B`` dichiara cancellazioni.
+- **Copertura**: frazione media di posizioni della parola di codice con almeno un voto, in
+  funzione di ``N`` (``COVERAGE_N``: casi con ``N`` esatto e con ``|N − n| ≤ 2``), accanto al
+  riferimento ``1 − (1 − 1/B)^N`` di posizioni scelte a caso in modo uniforme e indipendente.
 - **Formattazione** (un frammento su cinque, prima chiave): ``black``, ``ruff format``,
   ``ruff check --fix``, aggiunta e rimozione di commenti; le letture devono restare identiche.
 - **Tempo** di inserimento + rilevazione (registro 1, 16, 1024) su un file da ~100 righe.
@@ -16,7 +19,7 @@ Per ``--fragments`` frammenti sintetici (``multimark.synthetic``) e ``--keys`` c
 Uso::
 
     python -m multimark.cli.selftest --fragments 500 --keys 100 \
-        --log docs/milestone_logs/P1_selftest.txt
+        --workers 4 --log docs/milestone_logs/P1_selftest.txt
 """
 
 from __future__ import annotations
@@ -47,6 +50,8 @@ from multimark.prf import derive_seed
 from multimark.synthetic import generate
 
 PROFILES = {"multimark": multimark_base(), "mcss": mcss_profile()}
+COVERAGE_N = (8, 13, 20, 32, 40, 56)
+COVERAGE_WINDOW = 2
 
 
 def fragment(seed: int) -> str:
@@ -119,7 +124,8 @@ def run_case(task: tuple[str, int, int]) -> dict[str, Any]:
     n_votes = d.extra["n_votes"]
     wrong = r.extra["n_names_wrong"]
     layout = build_layout(AstIndex.from_code(r.code), cfg, key)
-    covered = len({i for s in layout.slots for i in s.indices}) == cfg.codeword_length
+    n_covered = len({i for s in layout.slots for i in s.indices})
+    covered = n_covered == cfg.codeword_length
     decoded = d.decoded_message
     expected = "".join(map(str, msg))
     out.update(
@@ -130,6 +136,7 @@ def run_case(task: tuple[str, int, int]) -> dict[str, Any]:
         agreement_ok=d.extra["agreement"] == n_votes - wrong,
         big=r.extra["n_sites"] >= cfg.codeword_length,
         covered=covered,
+        coverage=n_covered / cfg.codeword_length,
         decode_status=d.extra["decode_status"],
         decoded_ok=decoded == expected,
         decoded_wrong=decoded is not None and decoded != expected,
@@ -159,6 +166,22 @@ def timing(repeats: int = 5) -> dict[str, float]:
     return out
 
 
+def coverage_lines(ok: list[dict[str, Any]], b: int) -> list[str]:
+    """Curva di copertura: frazione media di posizioni con almeno un voto in funzione di ``N``."""
+    out = [f"coverage of the B = {b} positions vs N (mean fraction covered; reference = "
+           f"1 - (1 - 1/B)^N; window = |N - n| <= {COVERAGE_WINDOW}):"]  # fmt: skip
+    for n in COVERAGE_N:
+        exact = [r["coverage"] for r in ok if r["n_sites"] == n]
+        near = [r["coverage"] for r in ok if abs(r["n_sites"] - n) <= COVERAGE_WINDOW]
+
+        def fmt(xs: list[float]) -> str:
+            return f"{sum(xs) / len(xs):.3f} ({len(xs)} cases)" if xs else "n/a (0 cases)"
+
+        ref = 1 - (1 - 1 / b) ** n
+        out.append(f"  N = {n:>2}: exact {fmt(exact)}; window {fmt(near)}; reference {ref:.3f}")
+    return out
+
+
 def summarize(results: list[dict[str, Any]], args: argparse.Namespace, secs: float) -> str:
     lines = [
         "P1 self-test of multimark (python -m multimark.cli.selftest)",
@@ -185,8 +208,12 @@ def summarize(results: list[dict[str, Any]], args: argparse.Namespace, secs: flo
             f"/{len(big_cov)}); decode status {dict(Counter(r['decode_status'] for r in big))}",
             f"N < B: {len(small)} cases; with erasures: {sum(r['erasures'] > 0 for r in small)}; "
             f"decode status {dict(Counter(r['decode_status'] for r in small))}",
-            f"wrong decoded messages (must be 0): {sum(r['decoded_wrong'] for r in ok)}",
+            f"wrong decoded messages (must be 0): {sum(r['decoded_wrong'] for r in ok)} "
+            f"(with no wrong name vote: "
+            f"{sum(r['decoded_wrong'] for r in ok if r['wrong_names'] == 0)}; with wrong name "
+            f"votes: {sum(r['decoded_wrong'] for r in ok if r['wrong_names'] > 0)})",
         ]
+        lines += coverage_lines(ok, PROFILES[profile].codeword_length)
         inv: dict[str, Counter] = {}
         for r in ok:
             for name, res in r.get("invariance", {}).items():

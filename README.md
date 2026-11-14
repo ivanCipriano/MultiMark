@@ -69,7 +69,7 @@ from multimark.config import multimark_base, mcss_profile
 from multimark.embed import embed
 from multimark.detect import detect
 
-cfg = multimark_base()                     # mcss_profile() per la reimplementazione di MCSS
+cfg = multimark_base()  # mcss_profile() per la reimplementazione di MCSS
 r = embed(code, "0101…(24 bit)", key, cfg)  # r.code, r.status (OK/PARTIAL/FAILED), r.extra
 d = detect(r.code, "0101…", key, cfg, registry_seed=global_seed)  # d.score, d.extra
 ```

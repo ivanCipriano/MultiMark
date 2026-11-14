@@ -183,8 +183,7 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
     excluded_names: set[tuple] = set()
     for _attempt in range(MAX_ATTEMPTS):
         # 2. nomi
-        used = identifiers_in(tree)
-        style_used = _StyleNames(index0)
+        scope_names = _ScopeNames(index0)
         renames = []
         no_candidate = unwritable_names = 0
         chosen: dict[tuple, str] = {}
@@ -194,15 +193,14 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
             chosen[slot.key] = original
             if slot.key in excluded_names:
                 continue
-            pool = used if cfg.names_variant in ("V2", "V2b") else style_used.for_slot(slot)
+            pool = scope_names.for_slot(slot)
             choice = _choose_name(slot, cw, key, cfg, code, index0, pool, proposer)
             if choice.reason == "no_candidate":
                 no_candidate += 1
             elif choice.reason == "unwritable":
                 unwritable_names += 1
             if choice.new is not None:
-                used.add(choice.new)
-                style_used.add(slot, choice.new)
+                scope_names.add(slot, choice.new)
                 renames.append((slot.name, choice.new))
                 chosen[slot.key] = choice.new
         try:
@@ -302,16 +300,17 @@ def _wrong_names(layout: Layout, cw: list[int], key: int, cfg: Config) -> int:
     return wrong
 
 
-class _StyleNames:
-    """Nomi da evitare nelle rinomine di stile (V1, V1b; MD16).
+class _ScopeNames:
+    """Nomi in conflitto per una rinomina (§3.6.4 [v1.2.1], MD16; V1, V1b, V2, V2b).
 
-    Per una variabile di funzione: gli identificatori della stessa unità, i nomi legati nello scope
-    del modulo, gli attributi, gli argomenti con nome e i nomi in ``global``/``nonlocal`` di tutto
-    il modulo (così la variabile rinominata resta un sito, regole (d)–(e) di §3.6.1), più i nomi
-    già scelti nella stessa unità e per il modulo. Per una variabile di modulo: tutti gli
-    identificatori del modulo e tutti i nomi già scelti. Rispetto a «non già usato nel modulo» di
-    §3.6.4 (scritto per i candidati di V2), due funzioni diverse possono dare lo stesso nome nuovo
-    a due loro variabili locali: è quello che fa la rinomina di stile di MCSS."""
+    Per una variabile locale: i nomi legati o letti nella sua funzione (l'unità, con le funzioni
+    annidate, che sono i suoi scope racchiudenti diversi dal modulo; i nomi di modulo che la
+    funzione legge sono fra questi), i nomi nuovi già scelti nella stessa unità e i nomi nuovi
+    delle variabili di modulo che l'unità legge. In più, perché la variabile rinominata resti un
+    sito (regole (d)–(e) di §3.6.1), gli attributi, gli argomenti con nome e i nomi in
+    ``global``/``nonlocal`` di tutto il modulo. Per una variabile di modulo: tutti gli
+    identificatori del modulo e tutti i nomi nuovi già scelti. Due funzioni diverse possono quindi
+    ricevere lo stesso nome nuovo."""
 
     def __init__(self, index: AstIndex) -> None:
         self.all = identifiers_in(index.tree)
@@ -321,8 +320,6 @@ class _StyleNames:
             unit = index.unit_of(node)
             for name in _node_identifiers(node):
                 self.by_unit.setdefault(unit.index, set()).add(name)
-                if unit.is_module:
-                    shared.add(name)
             if isinstance(node, ast.Attribute):
                 shared.add(node.attr)
             elif isinstance(node, ast.keyword) and node.arg:
@@ -331,24 +328,24 @@ class _StyleNames:
                 shared.update(node.names)
         self.shared = shared
         self.chosen_by_unit: dict[int, set[str]] = {}
+        self.module_renames: dict[str, str] = {}  # nome originale di modulo -> nome nuovo
 
     def for_slot(self, slot: Slot) -> set[str]:
         assert slot.name is not None
         unit = slot.name.unit
-        module_chosen = self.chosen_by_unit.get(-1, set())
         if unit.is_module:
             every = set().union(*self.chosen_by_unit.values()) if self.chosen_by_unit else set()
             return self.all | every
-        return (
-            self.by_unit.get(unit.index, set())
-            | self.shared
-            | self.chosen_by_unit.get(unit.index, set())
-            | module_chosen
-        )
+        own = self.by_unit.get(unit.index, set())
+        read_module = {new for old, new in self.module_renames.items() if old in own}
+        return own | self.shared | self.chosen_by_unit.get(unit.index, set()) | read_module
 
     def add(self, slot: Slot, name: str) -> None:
         assert slot.name is not None
-        self.chosen_by_unit.setdefault(slot.name.unit.index, set()).add(name)
+        unit = slot.name.unit
+        self.chosen_by_unit.setdefault(unit.index, set()).add(name)
+        if unit.is_module:
+            self.module_renames[slot.name.name] = name
 
 
 def _node_identifiers(node: ast.AST) -> list[str]:

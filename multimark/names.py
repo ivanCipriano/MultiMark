@@ -449,7 +449,8 @@ def identifiers_in(tree: ast.AST) -> set[str]:
 
 def valid_new_name(candidate: str, original: str, used: set[str], snake: bool = True) -> bool:
     """Validità di un nome nuovo (§3.6.4): identificatore, ``snake_case`` (solo V2/V2b),
-    ``len ≥ 2``, non riservato, non builtin, non già usato nel modulo, diverso dall'originale, non
+    ``len ≥ 2``, non riservato, non builtin, non in ``used`` (i nomi in conflitto nello scope della
+    variabile, §3.6.4 [v1.2.1]: li calcola ``embed._ScopeNames``), diverso dall'originale, non
     termina con ``_`` e non inizia con ``_``; mai ``self``/``cls`` (resta un sito dei nomi)."""
     return (
         candidate.isidentifier()
@@ -463,6 +464,20 @@ def valid_new_name(candidate: str, original: str, used: set[str], snake: bool = 
         and not candidate.startswith("_")
         and candidate not in _EXCLUDED_NAMES
     )
+
+
+def _scope_identifiers(tree: ast.Module, function_name: str) -> set[str]:
+    """Identificatori delle funzioni di primo livello (anche metodi) chiamate ``function_name``;
+    tutto il modulo se ``function_name`` è vuoto o non si trova."""
+    if not function_name:
+        return identifiers_in(tree)
+    out: set[str] = set()
+    found = False
+    for node in iter_preorder(tree):
+        if isinstance(node, FUNCTION_TYPES) and node.name == function_name:
+            found = True
+            out |= identifiers_in(node)
+    return out if found else identifiers_in(tree)
 
 
 class Proposer(Protocol):
@@ -486,13 +501,15 @@ def synonyms() -> dict[str, tuple[str, ...]]:
 class StaticProposer:
     """Ripiego non neurale (§3.6.4). Candidati, in quest'ordine: (1) sinonimi di ``norm(n)`` dal
     dizionario fisso; (2) ``norm(n) + "_" + suffisso``; (3) prefisso + ``norm(n)``. Restituisce i
-    primi ``k`` candidati validi (§3.6.4) rispetto al codice dato."""
+    primi ``k`` candidati validi (§3.6.4) rispetto ai nomi delle funzioni ``function_name`` del
+    codice (per ``function_name == ""``, la variabile di modulo: tutti i nomi del modulo); il
+    controllo completo di scope lo rifà l'inserimento."""
 
     def propose(self, code: str, function_name: str, var_name: str, k: int = 8) -> list[str]:
         base = normalize_name(var_name)
         raw = [*synonyms().get(base, ()), *(f"{base}_{s}" for s in SUFFIXES),
                *(f"{p}{base}" for p in PREFIXES)]  # fmt: skip
-        used = identifiers_in(ast.parse(code))
+        used = _scope_identifiers(ast.parse(code), function_name)
         out: list[str] = []
         for cand in raw:
             if cand not in out and valid_new_name(cand, var_name, used):
