@@ -1,0 +1,49 @@
+P1 self-test of multimark (python -m multimark.cli.selftest)
+library 0.0.1; python 3.11.18; fragments=500 keys=100; wall time 3908 s
+
+== profile multimark: 50000 cases
+embed status: {'OK': 32300, 'PARTIAL': 17700}; failed reasons: {}
+skipped sites (total): 0; name sites without candidate (total): 0 in 0 cases; wrong name votes (total): 0
+comparison: agreement == N - wrong_names in 50000/50000
+N >= B: 32300 cases; all B positions covered: 23757; decoded == m: 29435 (covered: 23757/23757); decode status {'ok': 29435, 'ambiguous': 2865}
+N < B: 17700 cases; with erasures: 17700; decode status {'ambiguous': 17659, 'ok': 41}
+wrong decoded messages: 0 (with no wrong name vote: 0; with wrong name votes: 0)
+wrong decoded messages by band (code.matrix = dmin4):
+  e = 0: 50000 cases; wrong decoded 0 (must be 0) (rate 0.0000)
+  e > 0, e + f <= 3: 0 cases; wrong decoded 0 (must be 0) (rate n/a)
+  e > 0, e + f > 3: 0 cases; wrong decoded 0 (rate n/a)
+coverage of the B = 32 positions vs N (mean fraction covered; reference = 1 - (1 - 1/B)^N; window = |N - n| <= 2):
+  N =  8: exact 0.226 (600 cases); window 0.251 (2000 cases); reference 0.224
+  N = 13: exact 0.346 (300 cases); window 0.351 (4500 cases); reference 0.338
+  N = 20: exact 0.491 (600 cases); window 0.486 (4000 cases); reference 0.470
+  N = 32: exact 0.659 (300 cases); window 0.656 (2000 cases); reference 0.638
+  N = 40: exact 0.745 (200 cases); window 0.738 (800 cases); reference 0.719
+  N = 56: exact 0.950 (300 cases); window 0.936 (1100 cases); reference 0.831
+formatting invariance add_comments: identical readings 100/100 (not available: 0)
+formatting invariance ruff_check_fix: identical readings 100/100 (not available: 0)
+formatting invariance ruff_format: identical readings 100/100 (not available: 0)
+formatting invariance strip_comments: identical readings 100/100 (not available: 0)
+
+== profile mcss: 50000 cases
+embed status: {'OK': 37600, 'PARTIAL': 12400}; failed reasons: {}
+skipped sites (total): 0; name sites without candidate (total): 0 in 0 cases; wrong name votes (total): 0
+comparison: agreement == N - wrong_names in 50000/50000
+N >= B: 37600 cases; all B positions covered: 37600; decoded == m: 37600 (covered: 37600/37600); decode status {'ok': 37600}
+N < B: 12400 cases; with erasures: 12400; decode status {'ok': 4504, 'ambiguous': 7896}
+wrong decoded messages: 0 (with no wrong name vote: 0; with wrong name votes: 0)
+wrong decoded messages by band (code.matrix = random):
+  e = 0: 50000 cases; wrong decoded 0 (must be 0) (rate 0.0000)
+  e > 0, e + f <= 3: 0 cases; wrong decoded 0 (rate n/a)
+  e > 0, e + f > 3: 0 cases; wrong decoded 0 (rate n/a)
+coverage of the B = 32 positions vs N (mean fraction covered; reference = 1 - (1 - 1/B)^N; window = |N - n| <= 2):
+  N =  8: exact n/a (0 cases); window n/a (0 cases); reference 0.224
+  N = 13: exact 0.406 (300 cases); window 0.410 (1900 cases); reference 0.338
+  N = 20: exact 0.625 (700 cases); window 0.618 (3000 cases); reference 0.470
+  N = 32: exact 1.000 (500 cases); window 0.976 (3000 cases); reference 0.638
+  N = 40: exact 1.000 (300 cases); window 1.000 (2200 cases); reference 0.719
+  N = 56: exact n/a (0 cases); window 1.000 (500 cases); reference 0.831
+formatting invariance add_comments: identical readings 100/100 (not available: 0)
+formatting invariance ruff_check_fix: identical readings 100/100 (not available: 0)
+formatting invariance ruff_format: identical readings 100/100 (not available: 0)
+formatting invariance strip_comments: identical readings 100/100 (not available: 0)
+timing: file of 85 lines, embed + detect (registry 1/16/1024): multimark 0.368 s, mcss 0.298 s (criterion < 1 s)
