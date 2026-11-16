@@ -5,7 +5,8 @@
   comprehension;
 - ``extend_all``: tutti i nomi di una lettera.
 
-Un nome di una lettera esteso prende il suffisso di §4.2 punto 4 (``n = 0`` → ``n_count``).
+Con V1/V1b (``mcss``) un nome di una lettera esteso prende il suffisso di §4.2 punto 4 (``n = 0``
+→ ``n_count``); con V2/V2b segue la regola di tutti i nomi (§3.6.4).
 """
 
 from __future__ import annotations
@@ -18,12 +19,22 @@ import pytest
 
 from multimark._astindex import AstIndex
 from multimark.cli.inventory import main as inventory_main
+from multimark.codec import encode
 from multimark.config import Config, mcss_profile, multimark_base
 from multimark.detect import detect
 from multimark.embed import embed
 from multimark.inventory import inventory_code
 from multimark.layout import build_layout
-from multimark.names import SINGLE_LETTER_MODES, name_sites, read_style
+from multimark.names import (
+    BASE_CANDIDATES,
+    MAX_CANDIDATES,
+    SINGLE_LETTER_MODES,
+    StaticProposer,
+    name_bit,
+    name_sites,
+    read_style,
+    valid_new_name,
+)
 from multimark.synthetic import generate
 
 CODE = """\
@@ -117,15 +128,32 @@ def test_v1_extends_with_type_suffix() -> None:
     assert all(read_style(n) is not None for n in names if n not in ("data",))
 
 
-def test_v2_tries_type_suffix_first() -> None:
+def test_v2_single_letter_follows_proposer_order() -> None:
+    # Con V2 un nome di una lettera segue la regola di tutti i nomi (§3.6.4): candidati del
+    # proponente nel loro ordine, poi i suffissi aggiuntivi fino a 32; nessun suffisso di tipo.
+    code = "def f(a):\n    n = 0\n    return n + a\n"
     cfg = multimark_base().with_(names_single_letter="extend_all")
-    renamed: set[str] = set()
+    proposer = StaticProposer()
+    n_renamed = 0
     for key in range(40):
         msg = [random.Random(key).getrandbits(1) for _ in range(24)]
-        r = embed("def f(a):\n    n = 0\n    return n + a\n", msg, key, cfg)
-        idx = AstIndex.from_code(r.code)
-        renamed.update(s.name for s in name_sites(idx, single_letter="extend_all"))
-    assert "n" in renamed and "n_count" in renamed
+        layout = build_layout(AstIndex.from_code(code), cfg, key)
+        (slot,) = layout.names
+        want = encode(msg, cfg.t, cfg.code_matrix)[slot.indices[0]]
+        r = embed(code, msg, key, cfg)
+        (site,) = name_sites(AstIndex.from_code(r.code), single_letter="extend_all")
+        if name_bit(key, "n") == want:
+            assert site.name == "n"
+            continue
+        expected = next(
+            c
+            for k in (BASE_CANDIDATES, MAX_CANDIDATES)
+            for c in proposer.propose(code, "f", "n", k=k)
+            if valid_new_name(c, "n", {"f", "a", "n"}) and name_bit(key, c) == want
+        )
+        assert site.name == expected
+        n_renamed += 1
+    assert n_renamed > 0
 
 
 SL_CODE = """\

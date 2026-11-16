@@ -41,7 +41,6 @@ from multimark.names import (
     identifiers_in,
     name_bit,
     name_slot,
-    normalize_name,
     read_style,
     read_style_v1b,
     render_style,
@@ -110,12 +109,7 @@ def _choose_name(
         if good(name):
             return _NameChoice(None)
         func = site.unit.name
-        if len(name) == 1:
-            # [v1.2.6] variabile di una lettera estesa (names.single_letter): prima il suffisso di
-            # §4.2 punto 4, poi i candidati del proponente.
-            ext = f"{normalize_name(name)}_{type_suffix(first_binding_value(index, site))}"
-            if valid_new_name(ext, name, used) and good(ext):
-                return _NameChoice(ext)
+        # Anche i nomi di una lettera (names.single_letter) seguono questa regola.
         # Prima i primi 8 candidati (§3.6.4); se nessuno ha il bit giusto, fino a 32.
         for k in (BASE_CANDIDATES, MAX_CANDIDATES):
             for cand in proposer.propose(code, func, name, k=k):
