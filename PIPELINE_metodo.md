@@ -1,7 +1,7 @@
 # PIPELINE_metodo.md — MultiMark: watermark multi-bit post-hoc per Python nel benchmark wm-bench
 
 > **Destinatario:** Claude Code. **Natura:** specifica vincolante di implementazione. In caso di ambiguità, fermati e chiedi a Ivan; non reinterpretare.
-> **Versione:** 1.2.5, 15 novembre 2026 (v1.2.5: esito del selftest di P1, criterio (a) di P2 per `multimark`, tolta la variante a 12 bit rimasta in P2; v1.2.4: esito inventario P1, decisioni K e O, §7; v1.2.3: suffissi aggiuntivi, §3.6.4; v1.2.2: matrice `dmin4` per `multimark`, §3.8; v1.2.1 del 13 sera: regola di scope per i nomi nuovi, `else_return` forma 0 solo in coda al blocco, MD15–MD17 accettate) (dopo l'inventario di P0: canali nuovi 9–14, variabili di modulo, criteri di P2 rivisti, autovalidazione `mcss` rivista, rilevazione aggregata; le modifiche rispetto alla 1.1 sono marcate «**[v1.2]**»). **Repository:** `multimark` (libreria del metodo, questo file sta nella sua radice) e `wm-bench` (benchmark, commit di partenza `a64f4ea`, ramo `posthoc-multimark`), vedi §0.4.
+> **Versione:** 1.2.6, 16 novembre 2026 (v1.2.6: esito dell'estrazione e della selezione di `mcss`, variabili di una lettera §4.2 punto 9, opzione `names.single_letter`; v1.2.5: esito del selftest di P1, criterio (a) di P2 per `multimark`, tolta la variante a 12 bit rimasta in P2; v1.2.4: esito inventario P1, decisioni K e O, §7; v1.2.3: suffissi aggiuntivi, §3.6.4; v1.2.2: matrice `dmin4` per `multimark`, §3.8; v1.2.1 del 13 sera: regola di scope per i nomi nuovi, `else_return` forma 0 solo in coda al blocco, MD15–MD17 accettate) (dopo l'inventario di P0: canali nuovi 9–14, variabili di modulo, criteri di P2 rivisti, autovalidazione `mcss` rivista, rilevazione aggregata; le modifiche rispetto alla 1.1 sono marcate «**[v1.2]**»). **Repository:** `multimark` (libreria del metodo, questo file sta nella sua radice) e `wm-bench` (benchmark, commit di partenza `a64f4ea`, ramo `posthoc-multimark`), vedi §0.4.
 > **Convenzioni:** prosa, docstring e commenti in italiano; identificatori, nomi di file, chiavi di configurazione e log in inglese (CLAUDE.md del benchmark). Le pagine di MCSS sono quelle del PDF arXiv 2607.06009v1.
 
 ---
@@ -106,6 +106,8 @@ Ordine = priorità rivista. Tempi in giorni di lavoro di Claude Code, test compr
 - Decisione C chiusa: parametri **esclusi** dal canale dei nomi di `multimark` (rinominarli cambia la firma e rompe i test di chi chiama); nel pool i parametri valgono il 31% dei siti dei nomi (2.619 contro 1.995): la perdita si dichiara e `names.include_params=true` resta un punto dell'ablazione (§6.3).
 
 **[v1.2.5] Esito di P1 (15 novembre, `P1_selftest.txt`, libreria `3e0fd8a`, 500 frammenti × 100 chiavi per profilo).** Nessun inserimento fallito, nessun sito saltato, nessun nome senza candidato, nessun messaggio sbagliato (0 su 100.000 casi); concordanza = N − voti sbagliati dei nomi in tutti i casi; letture identiche dopo `add_comments`, `strip_comments`, `ruff format`, `ruff check --fix` (black coperto dai test della libreria, non dal selftest sul cluster); tempo 0,37 s (`multimark`) e 0,30 s (`mcss`) su 85 righe. Copertura delle 32 posizioni: `mcss` = min(N, B)/B (cicli completi, come nel paper); `multimark` sopra il valore atteso per posizioni casuali 1 − (1 − 1/B)^N (0,49 contro 0,47 a N = 20; 0,95 contro 0,83 a N = 56). Costo dichiarato del legame per funzione: senza attacchi, con N ≥ B, decodifica aperta ambigua nell'8,9% dei casi per `multimark` e 0% per `mcss`; con N < B, `mcss` decodifica il 36% dei casi (fino a 3–4 cancellazioni), `multimark` lo 0,2%. La differenza si misura sotto attacco in P4 (T2.1, T2.5), dove il legame posizionale perde l'allineamento. Le fasce con e > 0 restano vuote senza attacchi: si misurano in P4.
+
+**[v1.2.6] Esito dell'estrazione e della selezione di `mcss` (16 novembre; `P1_codenet_extra.txt`, `P1_mcss_band_detail.txt`, `P1_mcss_selftest_extra.txt`; libreria `1712e38`).** Estratte 22.483 sottomissioni Python (2.500 di 50 problemi dev, 19.983 di 400 problemi mai usati, 4 problemi tolti per cluster di test); 53 duplicati per impronta; pool allargato 27.879 file, ammessi 27.040 (461 problemi). Nella fascia 32–39 bit: 237 file da 101 problemi; selezione una per problema: **101 file da 101 problemi**. Criterio della Tabella 3: media `n_bits_v1` 34,80 contro 34,6 (+0,6%): **superato**. Riportati: variabili 10,74 (−9,7%), siti strutturali 13,32 (+22%); sui 237 file della fascia rapporto strutturali/variabili 1,37 contro 0,92. Il rapporto resta lontano dal paper: causa più probabile le variabili di una lettera (§4.2 punto 9), da misurare prima di riprodurre la Tabella 5. Su quegli stessi 101 file `multimark` (base, senza variabili di modulo) ha in media 20,1 siti, 83 file con ≥ 13 e 9 con ≥ 32.
 
 ---
 
@@ -515,6 +517,7 @@ def detect(code, m_expected, K, cfg, registry_sizes=(1, 16, 1024)):
 | `channels` **[v1.2]** | `mcss8`, `extended`, `extended+str` | `extended` | `mcss8` |
 | `names.module_level` **[v1.2]** | bool | decisione O (§7); `false` fino ad allora | `true` |
 | `code.matrix` **[v1.2.2]** | `random`, `dmin4` | `dmin4` (se passa il controllo di §3.8) | `random` |
+| `names.single_letter` **[v1.2.6]** | `exclude`, `extend_except_loop`, `extend_all` | `exclude` (ablazione, §6.3) | scelta con i dati, §4.2 punto 9 |
 | `voting` | `simple`, `weighted`, `weighted_erasure` | `simple` | `simple` |
 | `channel_weights` | file JSON (solo `weighted*`) | — | — |
 
@@ -528,7 +531,7 @@ Il `config_hash` dipende da tutte le chiavi tranne `registry_seed` (è il `globa
 
 - Alfabeto a 6 bit, 24 bit di messaggio, codice compatto con 4t bit di controllo, `B = 24 + 4t` (p. 3, p. 4–5).
 - Otto canali della Tabella 2 (p. 5) con il significato delle forme canonica/alternativa.
-- Canale dei nomi a 4 stili, 2 bit per variabile, variabili di una parola estese con un suffisso per diventare a più parole, variabili di una lettera escluse (p. 5, passi 1–2).
+- Canale dei nomi a 4 stili, 2 bit per variabile, variabili di una parola estese con un suffisso per diventare a più parole, variabili di una lettera: **[v1.2.6] punto aperto**, vedi §4.2 punto 9 (p. 5, passi 1–2).
 - Costruzione del pool (p. 5, passi 3–5): normalizzazione dei nomi a `snake_case`, normalizzazione strutturale alla forma canonica, siti in ordine di visita in profondità, **prima tutte le variabili poi i siti strutturali**, variabili con 2 posizioni consecutive.
 - Assegnazione φ a cicli completi: per il ciclo `k = i // B`, una permutazione di `{0..B−1}` ottenuta con Fisher-Yates guidato dal flusso pseudo-casuale della chiave; `phi(i) = perm_k[i mod B]` (p. 5, §4.5).
 - Rilevazione: voto a maggioranza per bit, parità → cancellazione, decodifica (Alg. 2, p. 6).
@@ -543,6 +546,7 @@ Il `config_hash` dipende da tutte le chiavi tranne `registry_seed` (è il `globa
 6. **Correzioni semantiche** ai canali (condizioni di §3.3.1): il paper dichiara «100% AST validity» (p. 8) ma non test funzionali sui marcati; le nostre condizioni sono più strette (es. `+` solo con letterale numerico) e riducono i siti. Si misura quanti siti si perdono rispetto alla lettura senza condizioni (`inventory_sites.py --no-guards`) e si riporta.
 7. **Matrice del codice compatto** nostra (§3.8).
 8. **Parametri delle funzioni**: non è detto se MCSS li rinomina. Default `names.include_params=true` per `mcss` (la figura 1 del paper rinomina il parametro `num_val`, p. 2) e `false` per `multimark`.
+9. **[v1.2.6] Variabili di una lettera.** Il paper (p. 5, passo 2) estende i nomi di una parola con un suffisso e porta come esempi `n → n_count` e `s → s_str`, cioè proprio nomi di una lettera; nella stessa frase dice che variabili di un carattere «come `i`» non possono portare uno stile. Il testo si contraddice. Letture possibili, opzione `names.single_letter`: `exclude` (finora: regola (c) di §3.6.1, `len ≥ 2`), `extend_except_loop` (nomi di una lettera estesi con il suffisso di punto 4, tranne i target di `for` e delle comprehension), `extend_all`. Si sceglie con i dati, su file mai di test: la lettura per `mcss` è quella con il rapporto strutturali/variabili sui file della fascia 32–39 più vicino a 0,92 (Tabella 3); a parità entro 0,05, quella con la media di variabili più vicina a 11,9. Esito e numeri in `docs/audit/mcss.md`. Per `multimark` la stessa opzione è un punto dell'ablazione (§6.3): più siti dei nomi sul codice corto, da pagare in impercettibilità.
 
 ### 4.3 Canale dei nomi V1 (per `mcss`)
 
@@ -639,6 +643,7 @@ Siti per canale, per funzione e per campione su L1 dev (canoniche, baseline Qwen
 | **[v1.2]** Canali | `mcss8` (base `extended`); `extended+str` solo se la decisione P lo ammette | siti per campione per fascia, TPR per fascia, ΔPass@1, `adversarial_logreg` |
 | **[v1.2]** Parametri nei nomi | `names.include_params=true` (base `false`) | siti dei nomi guadagnati, ΔPass@1 (atteso: fallimenti dei test che chiamano con argomenti nominati), TPR sotto T1.4 |
 | **[v1.2]** Variabili di modulo | il valore opposto a quello della base (decisione O) | siti dei nomi su L2, ΔPass@1 su L2 e ClassEval |
+| **[v1.2.6]** Variabili di una lettera | `names.single_letter = extend_except_loop`, `extend_all` (base `exclude`) | siti dei nomi su L1/L2, TPR per fascia, `adversarial_logreg`, ΔPass@1 |
 
 Attacchi di sviluppo per le ablazioni (tutti CPU): T1.1, T1.4 (r ∈ {0,5; 1,0} × natural), T1.5 (k = 5), T1.6, T2.1 (b = all), T2.4k (k = 1, 3; solo L2 dev multi-funzione), T2.5 (2, around), T4.1 (rename = true). Niente T2.2 su dev (GPU).
 
