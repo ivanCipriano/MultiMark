@@ -11,7 +11,11 @@ comprese le funzioni annidate):
     di ``For``, ``with ... as``, ``NamedExpr``; le comprehension **escluse**);
 (b) non è parametro di ``f`` (salvo ``include_params=True``: allora i parametri contano come
     binding);
-(c) ``len(n) ≥ 2`` e ``n`` non è ``_`` né inizia per ``_``;
+(c) ``len(n) ≥ 2`` e ``n`` non è ``_`` né inizia per ``_``; **[v1.2.6]** con l'opzione
+    ``names.single_letter`` (§3.11, §4.2 punto 9) ``len(n) ≥ 2`` vale solo per ``exclude``:
+    ``extend_all`` ammette anche i nomi di una lettera, ``extend_except_loop`` li ammette tranne
+    quelli che nell'unità sono bersaglio di un ``for`` o di una comprehension (anche una sola
+    volta);
 (d) non è dichiarato ``global``/``nonlocal`` (in tutto il modulo, come T1.4);
 (e) non compare come argomento con nome in una chiamata (``g(n=…)``) né come attributo (``.n``)
     (in tutto il modulo, come T1.4);
@@ -49,6 +53,8 @@ from multimark._astindex import FUNCTION_TYPES, AstIndex, FunctionUnit, iter_pre
 from multimark.prf import prf_bit, prf_int
 
 NAME_VARIANTS = ("V0", "V1", "V1b", "V2", "V2b")
+#: Valori di ``names.single_letter`` (§3.11 [v1.2.6]).
+SINGLE_LETTER_MODES = ("exclude", "extend_except_loop", "extend_all")
 _DYNAMIC_SCOPE = frozenset({"locals", "vars", "eval", "exec"})
 _EXCLUDED_NAMES = frozenset({"self", "cls"})
 
@@ -224,10 +230,34 @@ def _first_bindings(
     return first, other
 
 
-def _common_rules(n: str, excluded: set[str], other: set[str]) -> bool:
+def _loop_targets(nodes: Iterable[ast.AST]) -> frozenset[str]:
+    """Nomi legati come bersaglio di ``for`` o di una comprehension fra ``nodes``."""
+    out: set[str] = set()
+    for node in nodes:
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            out.update(n.id for n in _target_names(node.target))
+    return frozenset(out)
+
+
+def _length_rule(n: str, single_letter: str, loop_targets: frozenset[str]) -> bool:
+    """Parte di (c) sulla lunghezza, secondo ``names.single_letter``."""
+    if len(n) >= 2:
+        return True
+    if single_letter == "extend_all":
+        return True
+    return single_letter == "extend_except_loop" and n not in loop_targets
+
+
+def _common_rules(
+    n: str,
+    excluded: set[str],
+    other: set[str],
+    single_letter: str = "exclude",
+    loop_targets: frozenset[str] = frozenset(),
+) -> bool:
     """Regole (c), (d), (e), (g) e l'esclusione dei binding non di variabile."""
     return (
-        len(n) >= 2  # (c)
+        _length_rule(n, single_letter, loop_targets)  # (c)
         and not n.startswith("_")
         and n not in _EXCLUDED_NAMES  # (g)
         and n not in excluded  # (d), (e)
@@ -240,6 +270,7 @@ def name_sites(
     include_params: bool = False,
     excluded_binding_ids: frozenset[int] = frozenset(),
     module_level: bool = False,
+    single_letter: str = "exclude",
 ) -> list[NameSite]:
     """Siti del canale dei nomi (§3.6.1): funzioni in ordine di visita, poi (con
     ``module_level=True``) le variabili di modulo; dentro l'unità, per rango.
@@ -249,7 +280,13 @@ def name_sites(
     non compare in un'istruzione ``global`` del modulo (già in (d)), non è in ``__all__``, non è il
     nome di una funzione, classe o ``import`` del modulo; (i) il modulo non usa ``locals``,
     ``vars``, ``eval``, ``exec``, ``globals`` nel proprio scope. I parametri non riguardano il
+    modulo.
+
+    ``single_letter`` (``names.single_letter``, [v1.2.6]): vedi la regola (c) in testa al modulo;
+    per le variabili di modulo i bersagli di ``for`` e comprehension sono quelli dello scope del
     modulo."""
+    if single_letter not in SINGLE_LETTER_MODES:
+        raise ValueError(f"names.single_letter must be one of {SINGLE_LETTER_MODES}")
     excluded = _module_exclusions(index.tree)
     in_class_body = _class_body_ids(index.tree)
     nodes_by_unit: dict[int, list[ast.AST]] = {}
@@ -265,6 +302,7 @@ def name_sites(
         assert unit.node is not None
         params = {a.arg for a in _param_args(unit.node)}
         first, other = _first_bindings(nodes, index, excluded_binding_ids)
+        loops = _loop_targets(nodes)
         if include_params:
             for a in _param_args(unit.node):
                 pos = index.position[id(a)]
@@ -273,17 +311,21 @@ def name_sites(
         chosen = [
             (pos, n, line, col)
             for n, (pos, line, col) in first.items()
-            if _common_rules(n, excluded, other) and (include_params or n not in params)  # (b)
+            if _common_rules(n, excluded, other, single_letter, loops)
+            and (include_params or n not in params)  # (b)
         ]
         for rank, (pos, n, line, col) in enumerate(sorted(chosen)):
             out.append(NameSite(unit, n, rank, line, col, pos))
     if module_level:
-        out.extend(_module_name_sites(index, excluded, excluded_binding_ids))
+        out.extend(_module_name_sites(index, excluded, excluded_binding_ids, single_letter))
     return out
 
 
 def _module_name_sites(
-    index: AstIndex, excluded: set[str], excluded_binding_ids: frozenset[int]
+    index: AstIndex,
+    excluded: set[str],
+    excluded_binding_ids: frozenset[int],
+    single_letter: str = "exclude",
 ) -> list[NameSite]:
     """Variabili di modulo (vedi ``name_sites``)."""
     tree = index.tree
@@ -295,10 +337,11 @@ def _module_name_sites(
     # (h): nomi di funzioni, classi e import in tutto il modulo, e nomi di __all__
     defined = {name for node in index.order for name in _other_bindings(node)}
     blocked = defined | _dunder_all(tree)
+    loops = _loop_targets(scope)
     chosen = [
         (pos, n, line, col)
         for n, (pos, line, col) in first.items()
-        if _common_rules(n, excluded, set()) and n not in blocked
+        if _common_rules(n, excluded, set(), single_letter, loops) and n not in blocked
     ]
     unit = index.unit_of(tree)
     return [

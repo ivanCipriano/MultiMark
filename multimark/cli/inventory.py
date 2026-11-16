@@ -22,6 +22,7 @@ from typing import Any, Optional
 
 from multimark.channels import CANONICAL_MODES
 from multimark.inventory import STAT_COLUMNS, format_summary, inventory_code, summarize
+from multimark.names import SINGLE_LETTER_MODES
 
 
 def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
@@ -62,6 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="off",
         help="module-level variables as name sites (names.module_level, default: off)",
     )
+    p.add_argument(
+        "--single-letter",
+        choices=SINGLE_LETTER_MODES,
+        default="exclude",
+        help="one-letter variables as name sites (names.single_letter, default: exclude)",
+    )
     return p
 
 
@@ -99,6 +106,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             include_params=args.include_params,
             module_level=args.module_level == "on",
             channels=args.channels,
+            single_letter=args.single_letter,
         )
         if args.id_field:
             row = {args.id_field: obj.get(args.id_field), **row}
@@ -112,12 +120,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "include_params": args.include_params,
         "module_level": args.module_level == "on",
         "channels": args.channels,
+        "single_letter": args.single_letter,
     }
     text = format_summary(summary, args.label)
     text += (
         f"\noptions: canonical={args.canonical} guards={not args.no_guards} "
         f"include_params={args.include_params} module_level={args.module_level} "
-        f"channels={args.channels}\n"
+        f"channels={args.channels} single_letter={args.single_letter}\n"
     )
     if args.summary:
         args.summary.parent.mkdir(parents=True, exist_ok=True)

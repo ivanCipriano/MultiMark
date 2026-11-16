@@ -100,6 +100,7 @@ def inventory_code(
     include_params: bool = False,
     module_level: bool = False,
     channels: str = "extended",
+    single_letter: str = "exclude",
 ) -> dict[str, Any]:
     """Riga dell'inventario per un campione. ``parse_ok=False`` se ``ast.parse`` fallisce."""
     try:
@@ -113,6 +114,7 @@ def inventory_code(
         include_params=include_params,
         excluded_binding_ids=loop_form_targets(sites, index),
         module_level=module_level,
+        single_letter=single_letter,
     )
     counts = count_by_channel(sites)
     row: dict[str, Any] = {"parse_ok": True, "error": None}

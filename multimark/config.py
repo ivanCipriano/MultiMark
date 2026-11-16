@@ -12,7 +12,7 @@ from typing import Optional
 from multimark.channels import CANONICAL_MODES, CHANNEL_SET_NAMES, ReadOptions
 from multimark.codec import MATRICES
 from multimark.linking import LINKING_MODES
-from multimark.names import NAME_VARIANTS
+from multimark.names import NAME_VARIANTS, SINGLE_LETTER_MODES
 
 T_VALUES = (0, 2, 4, 8)
 MASK_MODES = ("on", "off")
@@ -34,6 +34,9 @@ class Config:
     names_include_params: bool = False
     # [v1.2] variabili di modulo nel canale dei nomi: decisione O di §7, ``false`` fino ad allora
     names_module_level: bool = False
+    # [v1.2.6] variabili di una lettera (§4.2 punto 9): ``exclude`` per entrambi i profili finché
+    # la lettura non si sceglie con i dati
+    names_single_letter: str = "exclude"
     # [v1.2] canali strutturali: ``extended`` (1–14, base) o ``mcss8`` (1–8)
     channels: str = "extended"
     # [v1.2.2] matrice del codice compatto (§3.8, MD18): ``dmin4`` per la base (ha passato il
@@ -51,6 +54,7 @@ class Config:
             ("canonical", self.canonical, CANONICAL_MODES),
             ("names.variant", self.names_variant, NAME_VARIANTS),
             ("names.proposer", self.names_proposer, PROPOSERS),
+            ("names.single_letter", self.names_single_letter, SINGLE_LETTER_MODES),
             ("voting", self.voting, VOTING_MODES),
             ("channels", self.channels, CHANNEL_SET_NAMES),
             ("code.matrix", self.code_matrix, MATRICES),

@@ -98,6 +98,7 @@ def build_layout(index: AstIndex, cfg: Config, key: int) -> Layout:
             include_params=cfg.names_include_params,
             excluded_binding_ids=loop_form_targets(sites, index),
             module_level=cfg.names_module_level,
+            single_letter=cfg.names_single_letter,
         )
     width = name_width(cfg)
     use_mask = cfg.mask == "on"
