@@ -1,8 +1,8 @@
 """Variabili di una lettera (``names.single_letter``, §3.11 e §4.2 punto 9 [v1.2.6]).
 
-- ``exclude``: regola (c) di §3.6.1, ``len ≥ 2`` (default di entrambi i profili);
+- ``exclude``: regola (c) di §3.6.1, ``len ≥ 2`` (default di ``multimark``, decisione R di §7);
 - ``extend_except_loop``: nomi di una lettera ammessi, tranne i bersagli di ``for`` e delle
-  comprehension;
+  comprehension (default di ``mcss``, §4.2 punto 9, esito v1.2.7);
 - ``extend_all``: tutti i nomi di una lettera.
 
 Con V1/V1b (``mcss``) un nome di una lettera esteso prende il suffisso di §4.2 punto 4 (``n = 0``
@@ -86,7 +86,7 @@ def test_underscore_and_self_stay_excluded() -> None:
 
 def test_config_defaults_and_validation() -> None:
     assert multimark_base().names_single_letter == "exclude"
-    assert mcss_profile().names_single_letter == "exclude"
+    assert mcss_profile().names_single_letter == "extend_except_loop"
     for mode in SINGLE_LETTER_MODES:
         assert Config(names_single_letter=mode).names_single_letter == mode
     with pytest.raises(ValueError):

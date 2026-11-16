@@ -34,8 +34,8 @@ class Config:
     names_include_params: bool = False
     # [v1.2] variabili di modulo nel canale dei nomi: decisione O di §7, ``false`` fino ad allora
     names_module_level: bool = False
-    # [v1.2.6] variabili di una lettera (§4.2 punto 9): ``exclude`` per entrambi i profili finché
-    # la lettura non si sceglie con i dati
+    # [v1.2.6] variabili di una lettera (§4.2 punto 9): ``exclude`` per la base (decisione R di §7,
+    # in P5), ``extend_except_loop`` per ``mcss`` (esito v1.2.7)
     names_single_letter: str = "exclude"
     # [v1.2] canali strutturali: ``extended`` (1–14, base) o ``mcss8`` (1–8)
     channels: str = "extended"
@@ -94,6 +94,7 @@ def mcss_profile() -> Config:
         names_variant="V1",
         names_include_params=True,
         names_module_level=True,
+        names_single_letter="extend_except_loop",
         channels="mcss8",
         code_matrix="random",
     )
