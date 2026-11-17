@@ -37,7 +37,7 @@ from typing import Any, Optional
 
 from multimark._astindex import AstIndex, iter_preorder
 from multimark.channels import CHANNELS, ReadContext, ReadOptions
-from multimark.names import name_sites
+from multimark.names import name_sites, styles_of_variant
 from multimark.sites import count_by_channel, find_sites, loop_form_targets
 
 THRESHOLDS = (32, 20, 13)
@@ -101,13 +101,25 @@ def inventory_code(
     module_level: bool = False,
     channels: str = "extended",
     single_letter: str = "exclude",
+    linking: str = "function_channel",
+    name_variant: str = "V2",
 ) -> dict[str, Any]:
-    """Riga dell'inventario per un campione. ``parse_ok=False`` se ``ast.parse`` fallisce."""
+    """Riga dell'inventario per un campione. ``parse_ok=False`` se ``ast.parse`` fallisce.
+
+    ``linking`` e ``name_variant`` servono solo alle condizioni che ne dipendono (MD23 per
+    ``list_comp`` con ``linking=positional``; MD20 per i nomi con V1/V1b): per contare i siti di
+    ``mcss`` si passano ``linking="positional"`` e ``name_variant="V1"``."""
     try:
         index = AstIndex.from_code(code)
     except (SyntaxError, ValueError) as exc:
         return {"parse_ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    ctx = ReadContext(index, ReadOptions(canonical=canonical, guards=guards, channels=channels))
+    options = ReadOptions(
+        canonical=canonical,
+        guards=guards,
+        channels=channels,
+        visit_order=linking == "positional",
+    )
+    ctx = ReadContext(index, options)
     sites = find_sites(index, ctx=ctx)
     names = name_sites(
         index,
@@ -115,6 +127,7 @@ def inventory_code(
         excluded_binding_ids=loop_form_targets(sites, index),
         module_level=module_level,
         single_letter=single_letter,
+        styles=styles_of_variant(name_variant),
     )
     counts = count_by_channel(sites)
     row: dict[str, Any] = {"parse_ok": True, "error": None}

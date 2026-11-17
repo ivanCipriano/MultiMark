@@ -22,7 +22,8 @@ from typing import Any, Optional
 
 from multimark.channels import CANONICAL_MODES
 from multimark.inventory import STAT_COLUMNS, format_summary, inventory_code, summarize
-from multimark.names import SINGLE_LETTER_MODES
+from multimark.linking import LINKING_MODES
+from multimark.names import NAME_VARIANTS, SINGLE_LETTER_MODES
 
 
 def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
@@ -69,6 +70,18 @@ def build_parser() -> argparse.ArgumentParser:
         default="exclude",
         help="one-letter variables as name sites (names.single_letter, default: exclude)",
     )
+    p.add_argument(
+        "--linking",
+        choices=LINKING_MODES,
+        default="function_channel",
+        help="bit linking (only for reader conditions that depend on it; mcss: positional)",
+    )
+    p.add_argument(
+        "--name-variant",
+        choices=NAME_VARIANTS,
+        default="V2",
+        help="names channel variant (V1/V1b drop names whose styles do not read back; mcss: V1)",
+    )
     return p
 
 
@@ -107,6 +120,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             module_level=args.module_level == "on",
             channels=args.channels,
             single_letter=args.single_letter,
+            linking=args.linking,
+            name_variant=args.name_variant,
         )
         if args.id_field:
             row = {args.id_field: obj.get(args.id_field), **row}
@@ -121,12 +136,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "module_level": args.module_level == "on",
         "channels": args.channels,
         "single_letter": args.single_letter,
+        "linking": args.linking,
+        "name_variant": args.name_variant,
     }
     text = format_summary(summary, args.label)
     text += (
         f"\noptions: canonical={args.canonical} guards={not args.no_guards} "
         f"include_params={args.include_params} module_level={args.module_level} "
-        f"channels={args.channels} single_letter={args.single_letter}\n"
+        f"channels={args.channels} single_letter={args.single_letter} "
+        f"linking={args.linking} name_variant={args.name_variant}\n"
     )
     if args.summary:
         args.summary.parent.mkdir(parents=True, exist_ok=True)

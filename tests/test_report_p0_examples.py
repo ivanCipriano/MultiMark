@@ -153,10 +153,10 @@ def test_example_2_functions_and_class() -> None:
 
 
 def test_example_3_near_sites() -> None:
+    # MD21: ``list`` è legato nel modulo (parametro di ``shadow``), quindi nemmeno ``[]`` è un sito
     assert site_texts(C) == {
         ("operand_order", "x * 2"),
         ("operand_order", "x + 1"),
-        ("empty_coll", "[]"),
     }
     assert name_set(C) == {"res", "out", "val", "pick", "both"}
     assert name_set(C, include_params=True) == {

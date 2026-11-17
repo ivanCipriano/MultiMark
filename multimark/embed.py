@@ -35,6 +35,7 @@ from multimark.layout import Layout, Slot, build_layout, name_value
 from multimark.names import (
     BASE_CANDIDATES,
     MAX_CANDIDATES,
+    RETRY_SUFFIXES,
     Proposer,
     StaticProposer,
     first_binding_value,
@@ -45,6 +46,8 @@ from multimark.names import (
     read_style_v1b,
     render_style,
     segments,
+    style_forms_ok,
+    styles_of_variant,
     type_suffix,
     valid_new_name,
 )
@@ -125,23 +128,34 @@ def _choose_name(
         reader = read_style_v1b
     if reader(name) == want:
         return _NameChoice(None)
+    styles = styles_of_variant(variant)
     segs = segments(name)
-    if len(segs) < 2:
-        segs = [*segs, type_suffix(first_binding_value(index, site))]
-    new = render_style(segs, want)
-    if new == name:
-        return _NameChoice(None)
-    if not valid_new_name(new, name, used, snake=False) or reader(new) != want:
-        return _NameChoice(None, "unwritable")
-    return _NameChoice(new)
+    first = segs if len(segs) >= 2 else [*segs, type_suffix(first_binding_value(index, site))]
+    # MD20: se la resa richiesta non si può usare per il contesto (conflitto con un nome,
+    # riservata, builtin), si provano i suffissi successivi prima di rinunciare.
+    last = segs[-1].lower() if segs else ""
+    tries = [first] + [
+        [*segs, sfx] for sfx in RETRY_SUFFIXES if sfx != last and [*segs, sfx] != first
+    ]
+    for parts in tries:
+        new = render_style(parts, want)
+        if new == name:
+            return _NameChoice(None)
+        if (
+            valid_new_name(new, name, used, snake=False)
+            and reader(new) == want
+            and style_forms_ok(parts, styles)
+        ):
+            return _NameChoice(new)
+    return _NameChoice(None, "unwritable")
 
 
 def _structural_keys(layout: Layout) -> list[tuple]:
-    return [s.key for s in layout.structural]
+    return [s.uid for s in layout.structural]
 
 
 def _name_keys(layout: Layout) -> list[tuple]:
-    return [s.key for s in layout.names]
+    return [s.uid for s in layout.names]
 
 
 def embed(
@@ -195,8 +209,8 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
         for slot in layout0.names:
             assert slot.name is not None
             original = slot.name.name
-            chosen[slot.key] = original
-            if slot.key in excluded_names:
+            chosen[slot.uid] = original
+            if slot.uid in excluded_names:
                 continue
             pool = scope_names.for_slot(slot)
             choice = _choose_name(slot, cw, key, cfg, code, index0, pool, proposer)
@@ -207,11 +221,11 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
             if choice.new is not None:
                 scope_names.add(slot, choice.new)
                 renames.append((slot.name, choice.new))
-                chosen[slot.key] = choice.new
+                chosen[slot.uid] = choice.new
         try:
             code1, failed_renames = rename_variables(code, index0, renames)
             for k in failed_renames:
-                chosen[k] = next(s.name.name for s in layout0.names if s.key == k and s.name)
+                chosen[k] = next(s.name.name for s in layout0.names if s.uid == k and s.name)
             unwritable_names += len(failed_renames)
             index1 = AstIndex.from_code(code1)
             layout1 = build_layout(index1, cfg, key)
@@ -223,13 +237,13 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
             for slot in layout1.structural:
                 assert slot.site is not None
                 target = cw[slot.indices[0]] ^ slot.mask
-                if slot.key in excluded_sites:
+                if slot.uid in excluded_sites:
                     target = slot.site.value
-                planned[slot.key] = target
+                planned[slot.uid] = target
                 requests.append(WriteRequest(slot.site, target))
             code2, unwritable = write_structural(code1, index1, requests)
             for k in unwritable:
-                planned[k] = next(s.site.value for s in layout1.structural if s.key == k and s.site)
+                planned[k] = next(s.site.value for s in layout1.structural if s.uid == k and s.site)
             # 4. rilettura completa
             layout2 = build_layout(AstIndex.from_code(code2), cfg, key)
         except (RewriteError, SyntaxError) as exc:
@@ -247,8 +261,8 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
         else:
             for slot in layout2.structural:
                 assert slot.site is not None
-                if slot.site.value != planned[slot.key]:
-                    bad_sites.add(slot.key)
+                if slot.site.value != planned[slot.uid]:
+                    bad_sites.add(slot.uid)
         if _name_keys(layout2) != _name_keys(layout0):
             bad_names |= {k for k, v in chosen.items() if v != _original_name(layout0, k)}
             if not bad_names - excluded_names:
@@ -257,8 +271,8 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
         else:
             for slot in layout2.names:
                 assert slot.name is not None
-                if slot.name.name != chosen[slot.key]:
-                    bad_names.add(slot.key)
+                if slot.name.name != chosen[slot.uid]:
+                    bad_names.add(slot.uid)
         new_bad = (bad_sites - excluded_sites) | (bad_names - excluded_names)
         if not new_bad:
             if bad_sites or bad_names:
@@ -266,7 +280,7 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
                 return EmbedResult(code, "FAILED", "rewrite_mismatch", extra)
             skipped = len(excluded_sites | set(unwritable))
             renamed = sum(1 for slot in layout0.names if slot.name and
-                          chosen[slot.key] != slot.name.name)  # fmt: skip
+                          chosen[slot.uid] != slot.name.name)  # fmt: skip
             extra.update(
                 skipped_sites=skipped,
                 n_renamed=renamed,
@@ -285,7 +299,7 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
 
 def _original_name(layout: Layout, key: tuple) -> str:
     for slot in layout.names:
-        if slot.key == key and slot.name is not None:
+        if slot.uid == key and slot.name is not None:
             return slot.name.name
     raise KeyError(key)
 
@@ -314,17 +328,23 @@ class _ScopeNames:
     delle variabili di modulo che l'unità legge. In più, perché la variabile rinominata resti un
     sito (regole (d)–(e) di §3.6.1), gli attributi, gli argomenti con nome e i nomi in
     ``global``/``nonlocal`` di tutto il modulo. Per una variabile di modulo: tutti gli
-    identificatori del modulo e tutti i nomi nuovi già scelti. Due funzioni diverse possono quindi
-    ricevere lo stesso nome nuovo."""
+    identificatori del modulo, i nomi nuovi già scelti per il modulo e quelli scelti nelle unità
+    che **leggono** la variabile (nome presente nell'unità e non legato lì: MD20; prima si
+    contavano i nomi scelti in tutte le unità, e un nome di una lettera di modulo trovava già preso
+    ``a_val`` da un parametro omonimo di una funzione che non lo legge). Due funzioni diverse
+    possono quindi ricevere lo stesso nome nuovo."""
 
     def __init__(self, index: AstIndex) -> None:
         self.all = identifiers_in(index.tree)
         self.by_unit: dict[int, set[str]] = {}
+        self.bound_by_unit: dict[int, set[str]] = {}
         shared: set[str] = set()
         for node in index.order:
             unit = index.unit_of(node)
             for name in _node_identifiers(node):
                 self.by_unit.setdefault(unit.index, set()).add(name)
+            if _binds(node):
+                self.bound_by_unit.setdefault(unit.index, set()).update(_node_identifiers(node))
             if isinstance(node, ast.Attribute):
                 shared.add(node.attr)
             elif isinstance(node, ast.keyword) and node.arg:
@@ -339,11 +359,20 @@ class _ScopeNames:
         assert slot.name is not None
         unit = slot.name.unit
         if unit.is_module:
-            every = set().union(*self.chosen_by_unit.values()) if self.chosen_by_unit else set()
-            return self.all | every
+            readers = {
+                i for i in self.chosen_by_unit if i == unit.index or slot.name.name in self._free(i)
+            }
+            chosen = set().union(*(self.chosen_by_unit[i] for i in readers)) if readers else set()
+            return self.all | chosen
         own = self.by_unit.get(unit.index, set())
-        read_module = {new for old, new in self.module_renames.items() if old in own}
+        free = self._free(unit.index)
+        read_module = {new for old, new in self.module_renames.items() if old in free}
         return own | self.shared | self.chosen_by_unit.get(unit.index, set()) | read_module
+
+    def _free(self, unit_index: int) -> set[str]:
+        """Nomi presenti nell'unità e non legati lì (letti da uno scope esterno)."""
+        own = self.by_unit.get(unit_index, set())
+        return own - self.bound_by_unit.get(unit_index, set())
 
     def add(self, slot: Slot, name: str) -> None:
         assert slot.name is not None
@@ -351,6 +380,15 @@ class _ScopeNames:
         self.chosen_by_unit.setdefault(unit.index, set()).add(name)
         if unit.is_module:
             self.module_renames[slot.name.name] = name
+
+
+def _binds(node: ast.AST) -> bool:
+    """``node`` lega il suo identificatore nello scope dell'unità."""
+    if isinstance(node, ast.Name):
+        return not isinstance(node.ctx, ast.Load)
+    return isinstance(
+        node, (ast.arg, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.alias)
+    )
 
 
 def _node_identifiers(node: ast.AST) -> list[str]:

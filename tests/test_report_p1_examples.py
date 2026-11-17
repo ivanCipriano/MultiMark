@@ -100,9 +100,10 @@ def test_example_2() -> None:
 
 def test_example_3() -> None:
     r, d = _run(E3)
-    assert (r.status, r.extra["n_sites"], r.extra["skipped_sites"]) == ("PARTIAL", 9, 1)
+    # MD25: la riga 4 (``list_comp`` sulla riga dell'``if``) non è più un sito
+    assert (r.status, r.extra["n_sites"], r.extra["skipped_sites"]) == ("PARTIAL", 8, 0)
     assert "if flag: picked = [u for u in output]" in r.code and "return evens[0:1]" in r.code
-    assert (d.extra["agreement"], d.extra["n_votes"]) == (8, 9)
-    assert round(d.score, 2) == 1.71 and round(d.extra["score_nreg16"], 2) == 1.71
-    assert round(d.extra["score_nreg1024"], 2) == 2.71
-    assert d.extra["best_nreg1024"] != "".join(map(str, MSG))
+    assert (d.extra["agreement"], d.extra["n_votes"]) == (8, 8)
+    assert round(d.score, 2) == 2.41 and round(d.extra["score_nreg16"], 2) == 2.41
+    assert round(d.extra["score_nreg1024"], 2) == 2.41
+    assert d.extra["best_nreg1024"] == "".join(map(str, MSG))

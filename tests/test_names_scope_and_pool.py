@@ -7,6 +7,7 @@ from multimark._astindex import AstIndex
 from multimark.config import mcss_profile
 from multimark.embed import _ScopeNames
 from multimark.layout import build_layout
+from multimark.names import render_style
 
 CODE = """\
 LIMIT_VALUE = 3
@@ -69,4 +70,23 @@ def test_scope_names_module_variable_renames_propagate() -> None:
     assert "limitValue" in scope.for_slot(local_f)  # f legge la variabile di modulo
     assert "limitValue" not in scope.for_slot(local_g)
     scope.add(local_g, "fooBar")
-    assert "fooBar" in scope.for_slot(module)  # per il modulo: tutti i nomi già scelti
+    # MD20: per il modulo contano i nomi scelti nelle unità che leggono la variabile (f la legge,
+    # g no)
+    assert "fooBar" not in scope.for_slot(module)
+    scope.add(local_f, "barBaz")
+    assert "barBaz" in scope.for_slot(module)
+
+
+def test_scope_names_parameter_with_module_name_is_not_a_reader() -> None:
+    # Caso della fixture p00004: il parametro ``a`` di una funzione diventa ``aVal``; la variabile
+    # di modulo ``a`` può diventare ``aVal`` anch'essa, perché la funzione non la legge.
+    code = "def inverse(a, b):\n    return a - b\n\n\na, b = 1, 2\nprint(inverse(a, b))\n"
+    cfg = mcss_profile().with_(names_single_letter="extend_except_loop")
+    index = AstIndex.from_code(code)
+    layout = build_layout(index, cfg, 7)
+    scope = _ScopeNames(index)
+    param = next(s for s in layout.names if s.name is not None and s.name.unit.name == "inverse")
+    module = next(s for s in layout.names if s.name is not None and s.name.unit.is_module)
+    assert param.name is not None and module.name is not None
+    scope.add(param, render_style([param.name.name, "val"], 1))
+    assert "aVal" not in scope.for_slot(module)

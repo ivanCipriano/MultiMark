@@ -204,13 +204,12 @@ Con il profilo `mcss` si aggiungono i parametri `value` (di `add`) e `digits`: `
 21      return list()
 ```
 
-**Siti strutturali** (solo tre: il file è costruito per mostrare le esclusioni)
+**Siti strutturali** (solo due: il file è costruito per mostrare le esclusioni)
 
 | # | fid | canale | rango | riga:col | nodo | forma letta | mcss |
 |---|---|---|---|---|---|---|---|
 | 1 | `('tricky', 3)` | 6 `operand_order` | 0 | 2:8 | `x * 2` | 0: costante a destra | = |
 | 2 | `('tricky', 3)` | 6 `operand_order` | 1 | 6:14 | `x + 1` | 0: costante a destra | = |
-| 3 | `('tricky', 3)` | 7 `empty_coll` | 0 | 11:10 | `[]` | 0: letterale | = |
 
 **Canale dei nomi**
 
@@ -222,11 +221,11 @@ Con il profilo `mcss` si aggiungono i parametri `value` (di `add`) e `digits`: `
 | `('tricky', 3)` | 3 | `pick` | 15 |
 | `('tricky', 3)` | 4 | `both` | 16 |
 
-**Inventario:** `n_sites_structural=3`, `n_vars=5`, `n_sites_total=8`, `n_bits_v1=13`,
+**Inventario:** `n_sites_structural=2`, `n_vars=5`, `n_sites_total=7`, `n_bits_v1=12`,
 `n_functions=2`, `n_duplicate_fids=0`, `loc=19`.
 Con `--no-guards` i siti strutturali diventano 5:
 - `x = x * 2` e `x = x + flag` diventano `aug_assign`, e il primo assorbe il sito 6 #1;
-- `out = []` + ciclo diventa `list_comp`, e assorbe il sito 7 #3;
+- `out = []` + ciclo diventa `list_comp`;
 - si aggiunge il `list()` della riga 21.
 
 **Nodi vicini che non sono siti**
@@ -237,13 +236,13 @@ Con `--no-guards` i siti strutturali diventano 5:
 | 3 | `x = 1 + x` | 1, 6 | Canale 1: `x` non è l'operando sinistro. Canale 6: escluso dalla **regola di non interferenza** (MD10). La forma 0 sarebbe `x = x + 1`, che è un sito 1: scrivere il sito 6 creerebbe un sito di un altro canale. |
 | 4 | `x = x + flag` | 1, 6 | Canale 1: con `+` serve una costante numerica. Canale 6: nessuna costante. |
 | 5–10 | `if flag: … elif items: … else: …` | 5 `ternary` | L'`If` esterno ha come `orelse` un altro `If`, non un'assegnazione. L'`If` interno (righe 7–10) ha la forma giusta ma è l'unico elemento dell'`orelse` di un `If` (posizione di `elif`), escluso per non interferenza (MD10). La regola vale in entrambe le forme: in forma 0 è un `elif`; in forma 1 `res = 0 if items else 1` sarebbe l'unica istruzione dell'`else`. Così il sito non compare né scompare cambiando forma. Il `x + 1` della riga 6 resta sito 6 (#2). |
-| 11–14 | `out = []` + `for val in items: out.append(val)` | 4 `list_comp` | `val` ha un riferimento **fuori dal sito** (`print(val)`, riga 14): MD12. In forma comprehension `val` non sarebbe più definita dopo. Il `[]` allora non appartiene a nessun sito 4 e torna sito 7 (#3); `val` torna binding ordinario, quindi variabile sito. |
+| 11–14 | `out = []` + `for val in items: out.append(val)` | 4 `list_comp` | `val` ha un riferimento **fuori dal sito** (`print(val)`, riga 14): MD12. In forma comprehension `val` non sarebbe più definita dopo. Il `[]` allora non appartiene a nessun sito 4; non è nemmeno un sito 7, perché `list` è legato nel modulo (riga 21, MD21). `val` torna binding ordinario, quindi variabile sito. |
 | 15 | `pick = x if flag else (1 if items else 2)` | 5 `ternary` | Un ramo è un `IfExp` (MD10). In forma 0 il ramo diventerebbe l'istruzione `pick = 1 if items else 2`, a sua volta candidata ternario (sarebbe un sito se fosse nel ramo `if`, qui cade in posizione di `elif`). Per tenere il pool uguale nelle due forme, un ramo `IfExp` esclude sempre il sito. L'`IfExp` interno non è valore diretto di un'assegnazione, quindi non è un sito. |
 | 16 | `1 + 2` | 6 `operand_order` | Serve **esattamente una** costante numerica; qui sono due. |
 | 17 | `0 < x < 10` | 2 `compare_dir` | Due operatori: il canale 2 vuole un solo operatore. |
 | 17 | `flag == True` | 3 `equality_dir`, 8 `none_check` | Il canale 3 esclude i confronti con `None`, `True`, `False`; il canale 8 riguarda solo `None`. |
 | 17 | `len(items) < len(out)` | 2 `compare_dir` | Stesso `kind` (4 e 4): senza forma canonica in `kind` (2D). E comunque entrambi gli operandi non sono puri (al più uno ammesso); per questo non è un sito nemmeno in `mcss`. |
-| 21 | `list()` | 7 `empty_coll` | `list` è ridefinito nel modulo (qui è il parametro di `shadow`): `list()` e `[]` non sono più equivalenti. |
+| 21 | `list()` | 7 `empty_coll` | `list` è ridefinito nel modulo (qui è il parametro di `shadow`): `list()` e `[]` non sono più equivalenti. **[MD21, 17 novembre]** Per la stessa ragione non è un sito nemmeno il `[]` della riga 11: scriverlo come `list()` farebbe sparire il sito (prima di MD21 era il sito 7 #3). |
 | 1 | variabili `x`, `items`, `flag` | nomi | `x`: nome di una lettera (condizione (c)) e parametro. `items`, `flag`: parametri (condizione (b)). In `mcss` `items` e `flag` sono siti, e lo è anche `list` di `shadow`. |
 
 ---

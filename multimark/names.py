@@ -16,6 +16,9 @@ comprese le funzioni annidate):
     ``extend_all`` ammette anche i nomi di una lettera, ``extend_except_loop`` li ammette tranne
     quelli che nell'unità sono bersaglio di un ``for`` o di una comprehension (anche una sola
     volta);
+    **MD20** (canale a stili, V1/V1b): il nome è un sito solo se le forme richieste
+    (``styles_of_variant``) sono distinte e ognuna si rilegge nel suo stile e allo stesso nome
+    normalizzato (``style_writable``); esclude per esempio ``count_3``, ``X_1``, ``tR``, ``c_k``;
 (d) non è dichiarato ``global``/``nonlocal`` (in tutto il modulo, come T1.4);
 (e) non compare come argomento con nome in una chiamata (``g(n=…)``) né come attributo (``.n``)
     (in tutto il modulo, come T1.4);
@@ -79,6 +82,12 @@ class NameSite:
     def dup_index(self) -> int:
         """Solo diagnostica: posizione della funzione fra quelle con lo stesso ``fid``."""
         return self.unit.dup_index
+
+    @property
+    def uid(self) -> tuple:
+        """``key`` più ``dup_index``: identifica il sito anche fra funzioni con lo stesso ``fid``
+        (solo per la contabilità interna dell'inserimento; i confronti usano ``key``)."""
+        return (*self.key, self.unit.dup_index)
 
 
 def _target_names(target: ast.AST) -> Iterable[ast.Name]:
@@ -254,10 +263,12 @@ def _common_rules(
     other: set[str],
     single_letter: str = "exclude",
     loop_targets: frozenset[str] = frozenset(),
+    styles: tuple[int, ...] = (),
 ) -> bool:
     """Regole (c), (d), (e), (g) e l'esclusione dei binding non di variabile."""
     return (
         _length_rule(n, single_letter, loop_targets)  # (c)
+        and (not styles or style_writable(n, styles))  # (c), MD20
         and not n.startswith("_")
         and n not in _EXCLUDED_NAMES  # (g)
         and n not in excluded  # (d), (e)
@@ -271,6 +282,7 @@ def name_sites(
     excluded_binding_ids: frozenset[int] = frozenset(),
     module_level: bool = False,
     single_letter: str = "exclude",
+    styles: tuple[int, ...] = (),
 ) -> list[NameSite]:
     """Siti del canale dei nomi (§3.6.1): funzioni in ordine di visita, poi (con
     ``module_level=True``) le variabili di modulo; dentro l'unità, per rango.
@@ -281,6 +293,9 @@ def name_sites(
     nome di una funzione, classe o ``import`` del modulo; (i) il modulo non usa ``locals``,
     ``vars``, ``eval``, ``exec``, ``globals`` nel proprio scope. I parametri non riguardano il
     modulo.
+
+    ``styles``: stili che il canale deve poter scrivere (``styles_of_variant``; vuoto per V2/V2b,
+    che leggono il nome normalizzato); vedi MD20 nella regola (c).
 
     ``single_letter`` (``names.single_letter``, [v1.2.6]): vedi la regola (c) in testa al modulo;
     per le variabili di modulo i bersagli di ``for`` e comprehension sono quelli dello scope del
@@ -311,13 +326,13 @@ def name_sites(
         chosen = [
             (pos, n, line, col)
             for n, (pos, line, col) in first.items()
-            if _common_rules(n, excluded, other, single_letter, loops)
+            if _common_rules(n, excluded, other, single_letter, loops, styles)
             and (include_params or n not in params)  # (b)
         ]
         for rank, (pos, n, line, col) in enumerate(sorted(chosen)):
             out.append(NameSite(unit, n, rank, line, col, pos))
     if module_level:
-        out.extend(_module_name_sites(index, excluded, excluded_binding_ids, single_letter))
+        out.extend(_module_name_sites(index, excluded, excluded_binding_ids, single_letter, styles))
     return out
 
 
@@ -326,6 +341,7 @@ def _module_name_sites(
     excluded: set[str],
     excluded_binding_ids: frozenset[int],
     single_letter: str = "exclude",
+    styles: tuple[int, ...] = (),
 ) -> list[NameSite]:
     """Variabili di modulo (vedi ``name_sites``)."""
     tree = index.tree
@@ -341,7 +357,7 @@ def _module_name_sites(
     chosen = [
         (pos, n, line, col)
         for n, (pos, line, col) in first.items()
-        if _common_rules(n, excluded, set(), single_letter, loops) and n not in blocked
+        if _common_rules(n, excluded, set(), single_letter, loops, styles) and n not in blocked
     ]
     unit = index.unit_of(tree)
     return [
@@ -407,6 +423,39 @@ def read_style_v1b(name: str) -> Optional[int]:
     """Lettura V1b: snake 0, camel 1, altri stili ``None``."""
     style = read_style(name)
     return style if style in (0, 1) else None
+
+
+#: Segmento di prova per estendere i nomi di un segmento nel controllo di ``style_writable``: i
+#: suffissi veri (``type_suffix``, ``RETRY_SUFFIXES``) sono tutti parole minuscole, quindi l'esito
+#: non dipende da quale si usa.
+_PROBE_SUFFIX = "val"
+
+
+def styles_of_variant(variant: str) -> tuple[int, ...]:
+    """Stili che il canale dei nomi deve poter scrivere: V1 tutti e 4, V1b snake e camel."""
+    return {"V1": (0, 1, 2, 3), "V1b": (0, 1)}.get(variant, ())
+
+
+def style_forms_ok(segs: Sequence[str], styles: Sequence[int]) -> bool:
+    """Le rese di ``segs`` negli stili ``styles`` sono distinte e ognuna si rilegge nel suo stile
+    con gli stessi segmenti (stesso nome normalizzato)."""
+    norm = "_".join(s.lower() for s in segs)
+    forms = [render_style(segs, k) for k in styles]
+    if len(set(forms)) != len(forms):
+        return False
+    return all(read_style(f) == k and normalize_name(f) == norm for k, f in zip(styles, forms))
+
+
+def style_writable(name: str, styles: Sequence[int] = (0, 1, 2, 3)) -> bool:
+    """MD20: il canale a stili può dare al nome ogni valore e la rilettura lo ritrova. Un nome di
+    un segmento si giudica esteso con un suffisso (§4.2 punto 4). Dipende solo dal nome, quindi
+    vale uguale sul codice originale e su quello marcato (le rese hanno gli stessi segmenti)."""
+    segs = segments(name)
+    if not segs:
+        return False
+    if len(segs) < 2:
+        segs = [*segs, _PROBE_SUFFIX]
+    return style_forms_ok(segs, styles)
 
 
 def name_bit(key: int, name: str) -> int:
@@ -538,6 +587,11 @@ EXTRA_SUFFIXES = (
     "data", "num", "obj", "out", "buf", "acc", "elem", "key", "ref", "part", "size", "info",
     "entry", "seq", "base", "step", "last", "orig", "var", "cur", "next", "prev", "total", "new",
 )  # fmt: skip
+#: Suffissi del tipo (§4.2 punto 4), nell'ordine di ``type_suffix``.
+TYPE_SUFFIXES = ("count", "val", "str", "list", "map", "flag")
+#: MD20: suffissi provati in ordine, dopo quello dal tipo, quando la resa richiesta non è
+#: scrivibile per il contesto (conflitto con un nome, parola riservata, builtin) nel canale a stili.
+RETRY_SUFFIXES = tuple(dict.fromkeys((*TYPE_SUFFIXES, *SUFFIXES, *EXTRA_SUFFIXES)))
 BASE_CANDIDATES = 8
 MAX_CANDIDATES = 32
 

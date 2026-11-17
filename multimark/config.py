@@ -74,7 +74,11 @@ class Config:
 
     @property
     def read_options(self) -> ReadOptions:
-        return ReadOptions(canonical=self.canonical, channels=self.channels)
+        return ReadOptions(
+            canonical=self.canonical,
+            channels=self.channels,
+            visit_order=self.linking == "positional",
+        )
 
     def with_(self, **changes: object) -> Config:
         return replace(self, **changes)  # type: ignore[arg-type]

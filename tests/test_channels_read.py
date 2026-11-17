@@ -357,8 +357,10 @@ def test_empty_coll_rebound_builtin(code: str) -> None:
 
 
 def test_empty_coll_rebound_only_affects_that_name() -> None:
+    # MD21: con ``list`` legato non è un sito nemmeno ``[]`` (la forma 1 sparirebbe); ``dict``
+    # e ``{}`` restano siti.
     code = "def f(list):\n    return dict(), [], {}\n"
-    assert channel_values(code, "empty_coll") == [1, 0, 0]
+    assert channel_values(code, "empty_coll") == [1, 0]
 
 
 def test_empty_list_call_before_append_loop_is_not_a_site() -> None:

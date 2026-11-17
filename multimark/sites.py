@@ -59,6 +59,12 @@ class Site:
         """Solo diagnostica: posizione della funzione fra quelle con lo stesso ``fid``."""
         return self.unit.dup_index
 
+    @property
+    def uid(self) -> tuple:
+        """``key`` più ``dup_index``: identifica il sito anche fra funzioni con lo stesso ``fid``
+        (solo per la contabilità interna dell'inserimento; i confronti usano ``key``)."""
+        return (*self.key, self.unit.dup_index)
+
 
 def _resolve_overlaps(candidates: list[Match], index: AstIndex) -> list[Match]:
     """Regola «vince il canale con numero minore», poi l'ordine di visita."""

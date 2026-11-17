@@ -18,8 +18,8 @@ Configurazione di base di `multimark`:
 - registro con `registry_seed = 20261001`.
 
 Messaggio: «gpt4» con l'alfabeto a 6 bit. Chiave K = 20261711, scelta perché ogni sito dei canali
-nuovi debba cambiare forma (prima chiave ≥ 20261116 con questa proprietà e con il sito non
-scrivibile dell'esempio 3). Tabelle e diff sono prodotti dalla libreria;
+nuovi debba cambiare forma (prima chiave ≥ 20261116 con questa proprietà e, prima di MD25,
+con il sito non scrivibile dell'esempio 3: la chiave resta la stessa). Tabelle e diff sono prodotti dalla libreria;
 `tests/test_report_p1_examples.py` ne verifica i numeri.
 
 **Dove si vede ogni canale nuovo (§3.3.1b)**
@@ -212,7 +212,7 @@ Concordanza A = 10 su N = 10 voti; punteggio principale (`N_reg = 1`) **3.01** (
 
 ---
 
-## Esempio 3 — Qualcosa non va: un sito non scrivibile
+## Esempio 3 — Un sito che non si può scrivere non è più un sito (MD25)
 
 ```text
  1  def first_even(data, flag):
@@ -226,7 +226,6 @@ Concordanza A = 10 su N = 10 voti; punteggio principale (`N_reg = 1`) **3.01** (
 |---|---|---|---|---|---|---|---|
 | `('first_even', 2)` | equality_dir | 0 | 2 | 1 | 7 | 1 | 1 |
 | `('first_even', 2)` | list_comp | 0 | 3 | 1 | 9 | 0 | 1 |
-| `('first_even', 2)` | list_comp | 1 | 4 | 1 | 10 | 1 | 0 |
 | `('first_even', 2)` | operand_order | 0 | 3 | 0 | 16 | 1 | 0 |
 | `('first_even', 2)` | slice_lower | 0 | 2 | 1 | 28 | 0 | 0 |
 | `('first_even', 2)` | else_return | 0 | 2 | 1 | 21 | 0 | 0 |
@@ -236,7 +235,7 @@ Concordanza A = 10 su N = 10 voti; punteggio principale (`N_reg = 1`) **3.01** (
 
 Messaggio `000110001111010011111000` («gpt4» con l'alfabeto a 6 bit); parola di codice (t = 2, B = 32): `000110001111010011111000 00100100`. Chiave K = 20261711.
 
-Inserimento: stato **PARTIAL**, N = 9 (B = 32), siti saltati 1, variabili rinominate 1, variabili senza candidato 0.
+Inserimento: stato **PARTIAL**, N = 8 (B = 32), siti saltati 0, variabili rinominate 1, variabili senza candidato 0.
 
 ```diff
 --- prima
@@ -259,22 +258,24 @@ Rilettura (voti per posizione della parola di codice; `·` = nessun voto):
 | posizione | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 | 31 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | `cw` | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 0 | 1 | 1 | 1 | 1 | 0 | 1 | 0 | 0 | 1 | 1 | 1 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
-| voti | · | · | · | · | · | · | · | 00 | 1 | 11 | 0 | · | · | · | · | · | 1 | · | · | · | · | 0 | · | · | · | · | · | · | 0 | · | · | · |
+| voti | · | · | · | · | · | · | · | 00 | 1 | 11 | · | · | · | · | · | · | 1 | · | · | · | · | 0 | · | · | · | · | · | · | 0 | · | · | · |
 
-Concordanza A = 8 su N = 9 voti; punteggio principale (`N_reg = 1`) **1.71** (= −log10 P[Bin(N, 1/2) ≥ A]); `score_nreg16` 1.71, `score_nreg1024` 2.71; decodifica `ambiguous`, cancellazioni 25, `bits_correct` 5/24, messaggio decodificato —.
+Concordanza A = 8 su N = 8 voti; punteggio principale (`N_reg = 1`) **2.41** (= −log10 P[Bin(N, 1/2) ≥ A]); `score_nreg16` 2.41, `score_nreg1024` 2.41; decodifica `ambiguous`, cancellazioni 26, `bits_correct` 5/24, messaggio decodificato —.
 
 **Lettura.**
-- **Sito saltato.** La riga 4 `if flag: picked = [u for u in result]` è un sito `list_comp` in
-  forma 1. Doveva diventare la forma 0 (ciclo con `append`), ma sta sulla stessa riga dell'`if`
-  (`SimpleStatementSuite`): LibCST non può aprire lì un ciclo senza riscrivere l'`if`.
-  - Il sito resta com'è e si conta in `skipped_sites = 1`.
-  - Alla rilettura è l'unico voto sbagliato: A = 8 su N = 9.
-- **Rischio di attribuzione sbagliata a N basso.** Con 9 voti il punteggio del messaggio atteso
-  (1,71) è alla pari con la migliore esca del registro a 16, ma sotto quello della migliore esca
-  del registro a 1024 (2,71: un'esca concorda con tutti e 9 i voti).
-  - Con il registro a 1024, questo campione sarebbe attribuito al messaggio sbagliato.
-  - È la misura di `wrong_attribution_rate` (§5.3) e il motivo per cui il punteggio principale è
-    quello a `N_reg = 1`.
-- `else_return` (riga 2, forma 1 → 0) sposta in `else` anche la riga col sito saltato; il sito
-  resta lo stesso (stesso rango, stesso valore).
+- **Riga 4, prima di MD25 un sito saltato.** `if flag: picked = [u for u in result]` era un sito
+  `list_comp` in forma 1. Per scriverlo in forma 0 (ciclo con `append`) bisogna aprire un ciclo,
+  ma l'assegnazione sta sulla stessa riga dell'`if` (`SimpleStatementSuite`) e LibCST non può farlo
+  senza riscrivere l'`if`. Nella versione precedente di questo report il sito restava com'era
+  (`skipped_sites = 1`) ed era l'unico voto sbagliato: A = 8 su N = 9.
+- **Con MD25 (17 novembre)** `list_comp` e `ternary` non sono siti quando l'assegnazione divide le
+  sue righe con un'altra istruzione o con l'intestazione del blocco. La condizione si legge sul
+  codice, quindi inserimento e rilevazione la applicano uguale: la riga 4 non è più un sito.
+  - Adesso N = 8, tutti scritti, nessun sito saltato: A = N = 8, punteggio 8 · log10 2 = 2,41.
+  - Prima, con il registro a 1024, un'esca concordava con tutti e 9 i voti e batteva il messaggio
+    atteso (2,71 contro 1,71). Adesso il migliore dei due registri è il messaggio atteso. Il
+    rischio di attribuzione sbagliata a N basso resta in generale (`wrong_attribution_rate`,
+    §5.3): è il motivo per cui il punteggio principale è quello a `N_reg = 1`.
+- `else_return` (riga 2, forma 1 → 0) sposta in `else` anche le righe 3–5; la riga 4 resta fuori
+  dai siti anche nella nuova posizione.
 - `result` → `output` (dizionario dei sinonimi); `evens` e `picked` portano già il bit richiesto.

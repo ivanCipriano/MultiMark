@@ -105,11 +105,14 @@ class ReadOptions:
       lessicografico del testo ``ast.unparse`` dell'operando; testi uguali → nessun sito).
     - ``guards``: condizioni semantiche di §3.3.1 (vedi docstring del modulo).
     - ``channels``: ``"extended"`` (canali 1–14, base di ``multimark``) o ``"mcss8"`` (1–8).
+    - ``visit_order``: le posizioni dei siti seguono l'ordine di visita di tutti i canali
+      (``linking=positional``, ``mcss``); serve alla condizione MD23 di ``list_comp``.
     """
 
     canonical: str = "kind"
     guards: bool = True
     channels: str = "extended"
+    visit_order: bool = False
 
     def __post_init__(self) -> None:
         if self.canonical not in CANONICAL_MODES:
@@ -251,7 +254,20 @@ def _direction(left: ast.AST, right: ast.AST, ctx: ReadContext) -> Optional[int]
     tl, tr = ast.unparse(left), ast.unparse(right)
     if tl == tr:
         return None
+    if _contains_candidate(left, ctx) or _contains_candidate(right, ctx):
+        # MD22: scrivere un sito dentro un operando ne cambia il testo e quindi la direzione.
+        return None
     return 0 if tl < tr else 1
+
+
+def _contains_candidate(expr: ast.AST, ctx: ReadContext) -> bool:
+    """``expr`` contiene un candidato di un canale strutturale attivo (radice compresa)."""
+    return bool(_candidate_channels(expr, ctx))
+
+
+def _candidate_channels(expr: ast.AST, ctx: ReadContext) -> set[str]:
+    """Canali dei candidati strutturali contenuti in ``expr`` (radice compresa)."""
+    return {m.channel for n in iter_preorder(expr) for m in recognize(n, ctx)}
 
 
 def _recognize_compare(
@@ -347,6 +363,15 @@ def _list_comp_conditions(
       definita."""
     if var == list_name:
         return False
+    in_expr = _candidate_channels(expr, ctx)
+    if in_expr:
+        in_it = _candidate_channels(it, ctx)
+        # MD23: fra le due forme ``expr`` passa da dopo ``it`` a prima di ``it`` nell'ordine di
+        # visita. Con il legame posizionale conta l'ordine di tutti i siti; con il legame per
+        # funzione e canale (e il run unico, ordinato per canale) solo quello dei siti dello
+        # stesso canale, che fissa il rango.
+        if (in_it and ctx.options.visit_order) or in_expr & in_it:
+            return False
     if not ctx.guards:
         return True
     if var in names_in(it) or list_name in names_in(expr) or list_name in names_in(it):
@@ -391,7 +416,7 @@ def list_comp_loop_form(
 def recognize_list_comp(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     """Canale 4: coppia ``L = []`` + ciclo con ``append`` (forma 0) o ``L = [expr for x in it]``
     con una sola clausola e nessun ``if`` (forma 1)."""
-    if not isinstance(node, ast.Assign):
+    if not isinstance(node, ast.Assign) or not _alone_on_line(node, ctx):
         return None
     loop_form = list_comp_loop_form(node, ctx)
     if loop_form is not None:
@@ -442,7 +467,7 @@ def recognize_ternary(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
         return Match("ternary", node, 0, _ids(node, s0, s1, t0, t1))
     if isinstance(node, ast.Assign) and isinstance(node.value, ast.IfExp):
         target = _single_name_target(node)
-        if target is None or _is_elif_position(node, ctx):
+        if target is None or _is_elif_position(node, ctx) or not _alone_on_line(node, ctx):
             return None
         exp = node.value
         if not _ternary_ok(target.id, exp.body, exp.orelse, ctx):
@@ -486,6 +511,11 @@ def recognize_operand_order(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
 def recognize_empty_coll(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     """Canale 7: ``[]``/``{}`` (forma 0) o ``list()``/``dict()`` (forma 1)."""
     if _is_empty_list(node) or (isinstance(node, ast.Dict) and not node.keys):
+        # MD21: se ``list``/``dict`` è legato nel modulo la forma 1 non è un sito, quindi non lo è
+        # nemmeno la forma 0 (la scrittura farebbe sparire il sito).
+        name = "list" if isinstance(node, ast.List) else "dict"
+        if ctx.guards and name in ctx.bound:
+            return None
         return Match("empty_coll", node, 0, _ids(node))
     for name in ("list", "dict"):
         if _is_empty_call(node, name):
@@ -589,6 +619,23 @@ def _block_of(stmt: ast.AST, ctx: ReadContext) -> Optional[tuple[list, int]]:
     return items, slot.index
 
 
+def _alone_on_line(stmt: ast.stmt, ctx: ReadContext) -> bool:
+    """MD25: ``stmt`` non divide le sue righe con un'altra istruzione (``a = 1; b = 2``) né con
+    l'intestazione del blocco che lo contiene (``def f(): b = 2``). Le forme che diventano più
+    istruzioni (``list_comp``, ``ternary``) non si possono scrivere su una riga condivisa."""
+    where = _block_of(stmt, ctx)
+    if where is None:
+        return False
+    items, i = where
+    start, end = stmt.lineno, stmt.end_lineno or stmt.lineno
+    if i > 0 and (items[i - 1].end_lineno or items[i - 1].lineno) >= start:
+        return False
+    if i + 1 < len(items) and items[i + 1].lineno <= end:
+        return False
+    parent = ctx.index.slot_of(stmt).parent
+    return not (isinstance(parent, ast.stmt) and getattr(parent, "lineno", -1) == start)
+
+
 def _is_assign_ifexp(stmt: ast.AST) -> bool:
     return isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.IfExp)
 
@@ -618,6 +665,22 @@ def _else_return_form1_shape(node: ast.If, body: list, ctx: ReadContext) -> bool
     return not (len(moved) == 1 and _is_assign_ifexp(moved[0]))
 
 
+def _changes_enclosing_if(node: ast.If, i: int, rest: list, ctx: ReadContext) -> bool:
+    """MD24: con ``node`` nel blocco di un ``If`` esterno, le due forme di ``else_return`` cambiano
+    il numero di istruzioni di quel blocco (1 contro più di 1, se ``node`` è la prima) e l'ultima
+    istruzione del corpo (``node`` contro l'ultima delle istruzioni spostate). Da queste dipendono
+    ``nested_if``, ``else_return`` e la posizione di ``elif`` dell'``If`` esterno: il sito si
+    esclude se ``node`` è la prima istruzione del blocco, o se sta nel corpo e le istruzioni
+    spostate terminano con ``return``/``raise``/``continue``/``break``. Indice e istruzioni
+    spostate sono gli stessi nelle due forme."""
+    slot = ctx.index.slot_of(node)
+    if not isinstance(slot.parent, ast.If) or slot.field not in ("body", "orelse"):
+        return False
+    if i == 0:
+        return True
+    return slot.field == "body" and bool(rest) and isinstance(rest[-1], _TERMINATORS)
+
+
 def recognize_else_return(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     """Canale 11: ``if c: …; return X`` + ``else: Y…`` (forma 0) o + ``Y…`` dopo l'``if`` nello
     stesso blocco (forma 1), §3.3.1b.
@@ -644,6 +707,9 @@ def recognize_else_return(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     if where is None:
         return None
     items, i = where
+    rest = node.orelse if node.orelse else items[i + 1 :]
+    if _changes_enclosing_if(node, i, rest, ctx):
+        return None
     if node.orelse:
         if _ifish(node.orelse[0]) or i != len(items) - 1:
             return None

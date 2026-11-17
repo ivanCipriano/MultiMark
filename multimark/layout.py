@@ -23,6 +23,7 @@ from multimark.names import (
     name_slot,
     read_style,
     read_style_v1b,
+    styles_of_variant,
 )
 from multimark.sites import Site, find_sites, loop_form_targets
 
@@ -47,6 +48,14 @@ class Slot:
             return self.site.key
         assert self.name is not None
         return self.name.key
+
+    @property
+    def uid(self) -> tuple:
+        """Chiave univoca anche con ``fid`` duplicati (``Site.uid``, ``NameSite.uid``)."""
+        if self.site is not None:
+            return self.site.uid
+        assert self.name is not None
+        return self.name.uid
 
 
 @dataclass(frozen=True)
@@ -84,7 +93,7 @@ def name_width(cfg: Config) -> int:
 
 
 def read_options(cfg: Config) -> ReadOptions:
-    return ReadOptions(canonical=cfg.canonical, guards=True, channels=cfg.channels)
+    return cfg.read_options
 
 
 def build_layout(index: AstIndex, cfg: Config, key: int) -> Layout:
@@ -99,6 +108,7 @@ def build_layout(index: AstIndex, cfg: Config, key: int) -> Layout:
             excluded_binding_ids=loop_form_targets(sites, index),
             module_level=cfg.names_module_level,
             single_letter=cfg.names_single_letter,
+            styles=styles_of_variant(cfg.names_variant),
         )
     width = name_width(cfg)
     use_mask = cfg.mask == "on"

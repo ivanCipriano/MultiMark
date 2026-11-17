@@ -280,7 +280,7 @@ class _Writer(cst.CSTTransformer):
         return entry
 
     def _fail(self, req: WriteRequest) -> None:
-        self.unwritable.add(req.site.key)
+        self.unwritable.add(req.site.uid)
 
     # -- canale 1
     def leave_Assign(self, original_node: cst.Assign, updated_node: cst.Assign) -> Any:
@@ -735,7 +735,7 @@ def rename_variables(
             if not ok:
                 break
         if not ok or not nodes:
-            failed.add(site.key)
+            failed.add(site.uid)
             continue
         for node in nodes:
             targets[id(node)] = new
