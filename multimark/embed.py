@@ -5,7 +5,8 @@ Passi:
 1. lettura (``ast``) del codice: siti strutturali, variabili sito, disposizione dei bit
    (``layout.build_layout``); ``N`` = voti potenziali;
 2. **nomi**: per ogni variabile, il nome che porta i bit richiesti (V2: il bit di
-   ``prf_bit(K, "name", norm(n))``; V1/V1b: lo stile; V2b: candidato con ``cw[phi] == bit``); la
+   ``prf_bit(K, "name", norm(n))``, o i 2 bit di ``names.name_bits`` con
+   ``names.bits_per_name = 2``, MD27; V1/V1b: lo stile; V2b: candidato con ``cw[phi] == bit``); la
    rinomina si scrive con LibCST (``ScopeProvider``);
 3. **siti strutturali**, sul codice già rinominato (con ``canonical="paper"`` la forma canonica
    dipende dai nomi): forma ``cw[phi(s)] XOR mask(s)``, scritta con LibCST;
@@ -41,6 +42,7 @@ from multimark.names import (
     first_binding_value,
     identifiers_in,
     name_bit,
+    name_bits,
     name_slot,
     read_style,
     read_style_v1b,
@@ -104,10 +106,14 @@ def _choose_name(
     if variant in ("V2", "V2b"):
 
         def good(n: str) -> bool:
-            bit = name_bit(key, n)
             if variant == "V2":
-                return bit == cw[slot.indices[0]]
-            return cw[name_slot(key, n, cfg.codeword_length)] == bit
+                # 1 o 2 posizioni (names.bits_per_name, MD27): il candidato è valido se tutti i
+                # bit del nome coincidono con la parola di codice
+                want = 0
+                for i in slot.indices:
+                    want = 2 * want + cw[i]
+                return name_bits(key, n, len(slot.indices)) == want
+            return cw[name_slot(key, n, cfg.codeword_length)] == name_bit(key, n)
 
         if good(name):
             return _NameChoice(None)
@@ -305,14 +311,15 @@ def _original_name(layout: Layout, key: tuple) -> str:
 
 
 def _wrong_names(layout: Layout, cw: list[int], key: int, cfg: Config) -> int:
-    """Voti sbagliati del canale dei nomi (variabili senza candidato o non scrivibili): con V1 una
-    variabile porta due voti. Le variabili non leggibili non votano e non si contano qui."""
+    """Voti sbagliati del canale dei nomi (variabili senza candidato o non scrivibili): con V1 e
+    con V2 a 2 bit per nome una variabile porta due voti. Le variabili non leggibili non votano e
+    non si contano qui."""
     wrong = 0
     for slot in layout.names:
         value = name_value(slot, key, cfg)
         if value is None:
             continue
-        if cfg.names_variant == "V1":
+        if len(slot.indices) == 2:
             wrong += int(value >> 1 != cw[slot.indices[0]]) + int(value & 1 != cw[slot.indices[1]])
         else:
             wrong += int(value != cw[slot.indices[0]])

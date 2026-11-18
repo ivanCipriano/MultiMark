@@ -702,6 +702,7 @@ def rename_variables(
     global_scope = next((s for s in scopes.values() if isinstance(s, GlobalScope)), None)
     targets: dict[int, str] = {}
     failed: set[tuple] = set()
+    unit_scopes: dict[int, list[Any]] = {}
     for site, new in renames:
         chosen: list[Any]
         if site.unit.is_module:
@@ -709,13 +710,17 @@ def rename_variables(
         else:
             assert site.unit.node is not None
             func = mapping.cst_of(site.unit.node)
-            inside = _subtree_ids(func)
-            chosen = [
-                s
-                for s in scopes.values()
-                if isinstance(s, FunctionScope) and getattr(s, "node", None) is not None
-                and id(s.node) in inside
-            ]  # fmt: skip
+            # scope di funzione dentro l'unità, calcolati una volta per unità (solo tempo: con 2
+            # bit per nome, MD27, le rinomine per funzione sono molte di più)
+            if id(func) not in unit_scopes:
+                inside = _subtree_ids(func)
+                unit_scopes[id(func)] = [
+                    s
+                    for s in scopes.values()
+                    if isinstance(s, FunctionScope) and getattr(s, "node", None) is not None
+                    and id(s.node) in inside
+                ]  # fmt: skip
+            chosen = unit_scopes[id(func)]
         nodes: list[cst.Name] = []
         ok = True
         for scope in chosen:

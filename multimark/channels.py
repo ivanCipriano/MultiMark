@@ -32,6 +32,11 @@ le sole condizioni *semantiche* (purezza, insieme degli operatori e tipo dell'op
 siano definite e quelle di non interferenza qui sotto (perimetro confermato da Ivan, 13 novembre
 2026).
 
+**[v1.3.2] Confronti fra due ``Name``** (``ReadOptions.same_kind = "binding_order"``, opzione
+``canonical.same_kind``, MD28): nei canali 2 e 3 sono siti, con la forma canonica dall'ordine dei
+primi binding (``_binding_direction``, scope da ``multimark/scopes.py``). Con ``"off"`` (base) la
+lettura è quella di sempre; con ``canonical="paper"`` l'opzione non è ammessa.
+
 **Non interferenza (§3.3.2 punto 3).** Oltre alla regola «un nodo appartiene al più a un sito, vince
 il canale con numero minore» (applicata in ``sites.py`` con gli insiemi ``owned``), alcune
 condizioni sono scritte in modo da valere **in entrambe le forme**, perché cambiare la forma di un
@@ -68,6 +73,7 @@ from multimark._astindex import (
     module_bindings,
     names_in,
 )
+from multimark.scopes import ScopeResolver
 
 CHANNELS: tuple[str, ...] = (
     "aug_assign",
@@ -94,6 +100,8 @@ CHANNEL_SETS: dict[str, tuple[str, ...]] = {"mcss8": CHANNELS[:8], "extended": C
 CHANNEL_SET_NAMES = ("mcss8", "extended", "extended+str")
 
 CANONICAL_MODES = ("kind", "paper")
+#: Valori di ``canonical.same_kind`` (§3.11 [v1.3.2], MD28).
+SAME_KIND_MODES = ("off", "binding_order")
 
 
 @dataclass(frozen=True)
@@ -107,16 +115,26 @@ class ReadOptions:
     - ``channels``: ``"extended"`` (canali 1–14, base di ``multimark``) o ``"mcss8"`` (1–8).
     - ``visit_order``: le posizioni dei siti seguono l'ordine di visita di tutti i canali
       (``linking=positional``, ``mcss``); serve alla condizione MD23 di ``list_comp``.
+    - ``same_kind`` (``canonical.same_kind``, [v1.3.2], MD28): ``"off"`` (base) o
+      ``"binding_order"``: nei canali 2 e 3 un confronto fra due ``Name`` è un sito, con forma
+      canonica dall'ordine dei primi binding (``_binding_direction``). Solo con
+      ``canonical="kind"``.
     """
 
     canonical: str = "kind"
     guards: bool = True
     channels: str = "extended"
     visit_order: bool = False
+    same_kind: str = "off"
 
     def __post_init__(self) -> None:
         if self.canonical not in CANONICAL_MODES:
             raise ValueError(f"canonical must be one of {CANONICAL_MODES}: {self.canonical!r}")
+        if self.same_kind not in SAME_KIND_MODES:
+            raise ValueError(f"same_kind must be one of {SAME_KIND_MODES}: {self.same_kind!r}")
+        if self.same_kind != "off" and self.canonical != "kind":
+            # TODO(ivan): la pipeline definisce binding_order solo per la base (canonical=kind).
+            raise ValueError("canonical.same_kind=binding_order requires canonical=kind")
         if self.channels not in CHANNEL_SET_NAMES:
             raise ValueError(f"channels must be one of {CHANNEL_SET_NAMES}: {self.channels!r}")
         if self.channels not in CHANNEL_SETS:
@@ -160,6 +178,10 @@ class ReadContext:
         for node in index.order:
             if isinstance(node, ast.JoinedStr):
                 self.in_fstring.update(id(n) for n in iter_preorder(node))
+        # Scope dei nomi, solo per canonical.same_kind=binding_order (MD28).
+        self.scopes: Optional[ScopeResolver] = (
+            ScopeResolver(index) if options.same_kind == "binding_order" else None
+        )
 
     @property
     def guards(self) -> bool:
@@ -249,6 +271,8 @@ def _direction(left: ast.AST, right: ast.AST, ctx: ReadContext) -> Optional[int]
     kl, kr = kind(left), kind(right)
     if kl != kr:
         return 0 if kl < kr else 1
+    if ctx.scopes is not None and isinstance(left, ast.Name) and isinstance(right, ast.Name):
+        return _binding_direction(left, right, ctx)
     if ctx.options.canonical == "kind":
         return None
     tl, tr = ast.unparse(left), ast.unparse(right)
@@ -258,6 +282,71 @@ def _direction(left: ast.AST, right: ast.AST, ctx: ReadContext) -> Optional[int]
         # MD22: scrivere un sito dentro un operando ne cambia il testo e quindi la direzione.
         return None
     return 0 if tl < tr else 1
+
+
+def _binding_direction(left: ast.Name, right: ast.Name, ctx: ReadContext) -> Optional[int]:
+    """``canonical.same_kind = binding_order`` (§3.11 [v1.3.2], MD28): per un confronto fra due
+    ``Name`` l'operando «minore» è quello il cui primo binding nella funzione (o nel modulo, per il
+    codice fuori dalle funzioni) viene prima nell'ordine di visita; i parametri vengono prima delle
+    variabili locali. Non è un sito (``None``) se:
+
+    - uno dei due nomi non ha binding nello scope dell'unità (builtin, nome non definito, nome di
+      modulo letto in una funzione, nome ``global``/``nonlocal``), ha un binding non di variabile
+      (``import``, ``def``, ``class``, ``except ... as``, ``match``) o è un attributo di classe;
+    - i due nomi sono la stessa variabile;
+    - un nome è la variabile di una comprehension o il bersaglio di un ``for`` col solo
+      ``L.append(...)`` che contiene il confronto (le due forme di ``list_comp``: nella forma 1 la
+      variabile è della comprehension);
+    - il primo binding di un nome è un ``NamedExpr`` (le forme di ``ternary`` e ``list_comp``
+      spostano le espressioni rispetto ai bersagli).
+
+    Così l'ordine dipende solo dalle posizioni dei binding, che nessuna scrittura dei canali e
+    nessuna rinomina coerente delle variabili cambia."""
+    assert ctx.scopes is not None
+    in_module = ctx.index.unit_of(left).is_module
+    keys: list[tuple[int, int]] = []
+    identities = []
+    for name in (left, right):
+        b = ctx.scopes.binding(name)
+        if b is None or not b.variable or b.scope_kind in ("comprehension", "class"):
+            return None
+        if b.scope_kind == "module" and not in_module:
+            return None
+        if b.first_how == "walrus" or _append_loop_target(name, ctx):
+            return None
+        keys.append((0 if b.first_how == "param" else 1, b.first))
+        identities.append(b.identity)
+    if identities[0] == identities[1]:
+        return None
+    return 0 if keys[0] < keys[1] else 1
+
+
+def _append_loop_target(name: ast.Name, ctx: ReadContext) -> bool:
+    """``name`` sta nel corpo di un ``for`` che ha ``name`` come bersaglio e per corpo il solo
+    ``L.append(expr)`` (forma 0 di ``list_comp``, a meno delle altre condizioni)."""
+    child: ast.AST = name
+    parent = ctx.index.parent_of(name)
+    while parent is not None:
+        if (
+            type(parent) is ast.For
+            and ctx.index.slot_of(child).field == "body"
+            and isinstance(parent.target, ast.Name)
+            and parent.target.id == name.id
+            and _is_append_loop(parent)
+        ):
+            return True
+        child, parent = parent, ctx.index.parent_of(parent)
+    return False
+
+
+def _is_append_loop(loop: ast.For) -> bool:
+    body = loop.body[0] if len(loop.body) == 1 else None
+    if not (isinstance(body, ast.Expr) and isinstance(body.value, ast.Call)):
+        return False
+    func = body.value.func
+    if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)):
+        return False
+    return _loop_append(loop, func.value.id) is not None
 
 
 def _contains_candidate(expr: ast.AST, ctx: ReadContext) -> bool:

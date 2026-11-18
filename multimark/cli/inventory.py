@@ -20,10 +20,10 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, Optional
 
-from multimark.channels import CANONICAL_MODES
+from multimark.channels import CANONICAL_MODES, SAME_KIND_MODES
 from multimark.inventory import STAT_COLUMNS, format_summary, inventory_code, summarize
 from multimark.linking import LINKING_MODES
-from multimark.names import NAME_VARIANTS, SINGLE_LETTER_MODES
+from multimark.names import BITS_PER_NAME, NAME_VARIANTS, SINGLE_LETTER_MODES
 
 
 def _read_jsonl(path: Path) -> Iterator[dict[str, Any]]:
@@ -82,6 +82,21 @@ def build_parser() -> argparse.ArgumentParser:
         default="V2",
         help="names channel variant (V1/V1b drop names whose styles do not read back; mcss: V1)",
     )
+    p.add_argument(
+        "--bits-per-name",
+        type=int,
+        choices=BITS_PER_NAME,
+        default=1,
+        help="bits per name with V2 (names.bits_per_name): n_sites_total counts each name this "
+        "many times (default: 1)",
+    )
+    p.add_argument(
+        "--same-kind",
+        choices=SAME_KIND_MODES,
+        default="off",
+        help="comparisons between two names in channels 2-3 (canonical.same_kind; binding_order "
+        "needs --canonical kind; default: off)",
+    )
     return p
 
 
@@ -106,7 +121,10 @@ def _write_rows(path: Path, rows: list[dict[str, Any]], columns: list[str]) -> N
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.same_kind != "off" and args.canonical != "kind":
+        parser.error("--same-kind binding_order requires --canonical kind")
     rows: list[dict[str, Any]] = []
     for obj in _read_jsonl(args.input):
         code = obj.get(args.code_field)
@@ -122,6 +140,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             single_letter=args.single_letter,
             linking=args.linking,
             name_variant=args.name_variant,
+            bits_per_name=args.bits_per_name,
+            same_kind=args.same_kind,
         )
         if args.id_field:
             row = {args.id_field: obj.get(args.id_field), **row}
@@ -138,13 +158,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "single_letter": args.single_letter,
         "linking": args.linking,
         "name_variant": args.name_variant,
+        "bits_per_name": args.bits_per_name,
+        "same_kind": args.same_kind,
     }
     text = format_summary(summary, args.label)
     text += (
         f"\noptions: canonical={args.canonical} guards={not args.no_guards} "
         f"include_params={args.include_params} module_level={args.module_level} "
         f"channels={args.channels} single_letter={args.single_letter} "
-        f"linking={args.linking} name_variant={args.name_variant}\n"
+        f"linking={args.linking} name_variant={args.name_variant} "
+        f"bits_per_name={args.bits_per_name} same_kind={args.same_kind}\n"
     )
     if args.summary:
         args.summary.parent.mkdir(parents=True, exist_ok=True)

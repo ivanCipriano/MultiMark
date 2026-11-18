@@ -53,11 +53,13 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 from multimark._astindex import FUNCTION_TYPES, AstIndex, FunctionUnit, iter_preorder
-from multimark.prf import prf_bit, prf_int
+from multimark.prf import prf, prf_bit, prf_int
 
 NAME_VARIANTS = ("V0", "V1", "V1b", "V2", "V2b")
 #: Valori di ``names.single_letter`` (§3.11 [v1.2.6]).
 SINGLE_LETTER_MODES = ("exclude", "extend_except_loop", "extend_all")
+#: Valori di ``names.bits_per_name`` (§3.11, §6.3 [v1.3.1]; MD27): 2 solo con V2.
+BITS_PER_NAME = (1, 2)
 _DYNAMIC_SCOPE = frozenset({"locals", "vars", "eval", "exec"})
 _EXCLUDED_NAMES = frozenset({"self", "cls"})
 
@@ -463,6 +465,21 @@ def name_bit(key: int, name: str) -> int:
     return prf_bit(key, "name", normalize_name(name))
 
 
+def name_bits(key: int, name: str, n: int = 1) -> int:
+    """Lettura V2 con ``names.bits_per_name = n`` (MD27): valore a ``n`` bit dall'ultimo byte di
+    ``prf(K, "name", norm(n))``. Con ``n = 1`` è ``name_bit``; con ``n = 2`` il bit alto (prima
+    posizione del nome) è ``name_bit`` e il bit basso (seconda posizione) è il bit successivo
+    dello stesso byte. TODO(ivan): la pipeline dice «2 bit PRF del nome normalizzato» senza dire
+    quali; si prendono i due bit meno significativi, così la prima posizione legge lo stesso bit
+    della V2 a 1 bit."""
+    if n not in BITS_PER_NAME:
+        raise ValueError(f"names.bits_per_name must be one of {BITS_PER_NAME}: {n}")
+    byte = prf(key, "name", normalize_name(name))[-1]
+    if n == 1:
+        return byte & 1
+    return ((byte & 1) << 1) | ((byte >> 1) & 1)
+
+
 def name_slot(key: int, name: str, b: int) -> int:
     """Indirizzo V2b: ``prf_int(K, "name-slot", norm(n)) mod B``."""
     return prf_int(key, "name-slot", normalize_name(name)) % b
@@ -572,6 +589,13 @@ def _scope_identifiers(tree: ast.Module, function_name: str) -> set[str]:
     return out if found else identifiers_in(tree)
 
 
+@lru_cache(maxsize=256)
+def _scope_identifiers_of(code: str, function_name: str) -> frozenset[str]:
+    """``_scope_identifiers`` dal sorgente, con cache: l'inserimento chiede candidati per molte
+    variabili dello stesso codice (solo tempo, il risultato è lo stesso)."""
+    return frozenset(_scope_identifiers(ast.parse(code), function_name))
+
+
 class Proposer(Protocol):
     """Proponente di nomi alternativi (§3.6.4), deterministico."""
 
@@ -618,7 +642,7 @@ class StaticProposer:
                *(f"{p}{base}" for p in PREFIXES)]  # fmt: skip
         if k > BASE_CANDIDATES:
             raw += [f"{base}_{s}" for s in EXTRA_SUFFIXES]
-        used = _scope_identifiers(ast.parse(code), function_name)
+        used = set(_scope_identifiers_of(code, function_name))
         out: list[str] = []
         for cand in raw:
             if cand not in out and valid_new_name(cand, var_name, used):

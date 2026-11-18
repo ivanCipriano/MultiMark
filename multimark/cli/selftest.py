@@ -16,6 +16,10 @@ Per ``--fragments`` frammenti sintetici (``multimark.synthetic``) e ``--keys`` c
   ``ruff check --fix``, aggiunta e rimozione di commenti; le letture devono restare identiche.
 - **Tempo** di inserimento + rilevazione (registro 1, 16, 1024) su un file da ~100 righe.
 
+Opzioni del profilo ``multimark`` ([v1.3.2]; ``mcss`` non cambia): ``--bits-per-name``
+(``names.bits_per_name``) e ``--same-kind`` (``canonical.same_kind``); con ``--same-kind`` diverso
+da ``off`` i frammenti contengono anche confronti fra due variabili (per entrambi i profili).
+
 Uso::
 
     python -m multimark.cli.selftest --fragments 500 --keys 100 \
@@ -42,26 +46,36 @@ from typing import Any, Optional
 
 from multimark import __version__
 from multimark._astindex import AstIndex
+from multimark.channels import SAME_KIND_MODES
 from multimark.codec import ERASURE, encode
 from multimark.config import Config, mcss_profile, multimark_base
 from multimark.detect import _majority, detect
 from multimark.embed import embed
 from multimark.layout import build_layout, read_votes
+from multimark.names import BITS_PER_NAME
 from multimark.prf import derive_seed
 from multimark.synthetic import generate
 
 PROFILES = {"multimark": multimark_base(), "mcss": mcss_profile()}
+
+
+def profiles(bits_per_name: int = 1, same_kind: str = "off") -> dict[str, Config]:
+    """Profili con le opzioni [v1.3.2] applicate a ``multimark`` (``mcss`` resta quello di §4)."""
+    base = multimark_base().with_(names_bits_per_name=bits_per_name, canonical_same_kind=same_kind)
+    return {"multimark": base, "mcss": mcss_profile()}
+
+
 COVERAGE_N = (8, 13, 20, 32, 40, 56)
 COVERAGE_WINDOW = 2
 
 
-def fragment(seed: int) -> str:
+def fragment(seed: int, name_compares: bool = False) -> str:
     """Frammento ``seed``: metà grandi (≥ 32 siti attesi), metà piccoli; 1–3 funzioni."""
     rng = random.Random(derive_seed("p1-selftest-fragment", seed))
     big = seed % 2 == 0
     n_functions = rng.choice([1, 1, 2, 3])
     n_statements = rng.randint(28, 45) if big else rng.randint(3, 12)
-    return generate(seed, n_statements, n_functions)
+    return generate(seed, n_statements, n_functions, name_compares=name_compares)
 
 
 def readings(code: str, cfg: Config, key: int) -> list[tuple]:
@@ -109,11 +123,14 @@ def formatters() -> dict[str, Any]:
     return out
 
 
-def run_case(task: tuple[str, int, int]) -> dict[str, Any]:
-    profile, frag_seed, key_index = task
-    cfg = PROFILES[profile]
+def run_case(task: tuple) -> dict[str, Any]:
+    """Un caso: ``(profilo, seme del frammento, indice della chiave)``, più facoltativi i bit per
+    nome e ``same_kind`` del profilo ``multimark``."""
+    profile, frag_seed, key_index, *opts = task
+    bits_per_name, same_kind = opts if opts else (1, "off")
+    cfg = profiles(bits_per_name, same_kind)[profile]
     method = "mcss" if profile == "mcss" else "multimark"
-    code = fragment(frag_seed)
+    code = fragment(frag_seed, name_compares=same_kind != "off")
     rng = random.Random(derive_seed("p1-selftest-key", frag_seed, key_index))
     key = rng.getrandbits(31)
     msg = [rng.getrandbits(1) for _ in range(cfg.message_bits)]
@@ -161,10 +178,10 @@ def run_case(task: tuple[str, int, int]) -> dict[str, Any]:
     return out
 
 
-def timing(repeats: int = 5) -> dict[str, float]:
-    code = generate(424242, 60, 1)
+def timing(repeats: int = 5, bits_per_name: int = 1, same_kind: str = "off") -> dict[str, float]:
+    code = generate(424242, 60, 1, name_compares=same_kind != "off")
     out: dict[str, float] = {"lines": float(len(code.splitlines()))}
-    for profile, cfg in PROFILES.items():
+    for profile, cfg in profiles(bits_per_name, same_kind).items():
         method = "mcss" if profile == "mcss" else "multimark"
         t0 = time.perf_counter()
         for k in range(repeats):
@@ -215,6 +232,8 @@ def summarize(results: list[dict[str, Any]], args: argparse.Namespace, secs: flo
         "P1 self-test of multimark (python -m multimark.cli.selftest)",
         f"library {__version__}; python {platform.python_version()}; "
         f"fragments={args.fragments} keys={args.keys}; wall time {secs:.0f} s",
+        f"multimark options: names.bits_per_name={args.bits_per_name} "
+        f"canonical.same_kind={args.same_kind} (mcss unchanged)",
         "",
     ]
     for profile in PROFILES:
@@ -262,8 +281,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--keys", type=int, default=100)
     p.add_argument("--workers", type=int, default=os.cpu_count() or 1)
     p.add_argument("--log", type=Path)
+    p.add_argument("--bits-per-name", type=int, choices=BITS_PER_NAME, default=1,
+                   help="names.bits_per_name of the multimark profile (default: 1)")  # fmt: skip
+    p.add_argument("--same-kind", choices=SAME_KIND_MODES, default="off",
+                   help="canonical.same_kind of the multimark profile (default: off)")  # fmt: skip
     args = p.parse_args(argv)
-    tasks = [(prof, f, k) for prof in PROFILES for f in range(args.fragments)
+    opts = (args.bits_per_name, args.same_kind)
+    tasks = [(prof, f, k, *opts) for prof in PROFILES for f in range(args.fragments)
              for k in range(args.keys)]  # fmt: skip
     t0 = time.perf_counter()
     if args.workers > 1:
@@ -272,7 +296,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         results = [run_case(t) for t in tasks]
     text = summarize(results, args, time.perf_counter() - t0)
-    tm = timing()
+    tm = timing(bits_per_name=args.bits_per_name, same_kind=args.same_kind)
     text += (
         f"timing: file of {tm['lines']:.0f} lines, embed + detect (registry 1/16/1024): "
         f"multimark {tm['multimark']:.3f} s, mcss {tm['mcss']:.3f} s (criterion < 1 s)\n"

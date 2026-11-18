@@ -9,7 +9,8 @@ Per campione (``inventory_code``):
 - ``n_vars_module``: quanti di ``n_vars`` sono variabili di modulo (0 con ``module_level=False``;
   serve alla decisione O di §7);
 - ``n_sites_total = n_sites_structural + n_vars`` (un bit per variabile, come la V2 della base:
-  è la ``N`` di §3.9 confrontata con ``B = 32``; confermato da Ivan il 13 novembre 2026);
+  è la ``N`` di §3.9 confrontata con ``B = 32``; confermato da Ivan il 13 novembre 2026); con
+  ``bits_per_name = 2`` ([v1.3.2], MD27) ``n_sites_structural + 2·n_vars``;
 - ``n_bits_v1 = n_sites_structural + 2·n_vars``: capacità con il canale dei nomi V1 di ``mcss``
   (2 bit per variabile). Le variabili sono quelle delle opzioni dell'inventario: per il profilo
   ``mcss`` completo si lancia con ``--canonical paper --include-params``;
@@ -37,7 +38,7 @@ from typing import Any, Optional
 
 from multimark._astindex import AstIndex, iter_preorder
 from multimark.channels import CHANNELS, ReadContext, ReadOptions
-from multimark.names import name_sites, styles_of_variant
+from multimark.names import BITS_PER_NAME, name_sites, styles_of_variant
 from multimark.sites import count_by_channel, find_sites, loop_form_targets
 
 THRESHOLDS = (32, 20, 13)
@@ -103,12 +104,18 @@ def inventory_code(
     single_letter: str = "exclude",
     linking: str = "function_channel",
     name_variant: str = "V2",
+    bits_per_name: int = 1,
+    same_kind: str = "off",
 ) -> dict[str, Any]:
     """Riga dell'inventario per un campione. ``parse_ok=False`` se ``ast.parse`` fallisce.
 
     ``linking`` e ``name_variant`` servono solo alle condizioni che ne dipendono (MD23 per
     ``list_comp`` con ``linking=positional``; MD20 per i nomi con V1/V1b): per contare i siti di
-    ``mcss`` si passano ``linking="positional"`` e ``name_variant="V1"``."""
+    ``mcss`` si passano ``linking="positional"`` e ``name_variant="V1"``. ``bits_per_name``
+    (``names.bits_per_name``, MD27) entra solo in ``n_sites_total``; ``same_kind``
+    (``canonical.same_kind``, MD28) aggiunge i confronti fra due ``Name`` ai canali 2 e 3."""
+    if bits_per_name not in BITS_PER_NAME:
+        raise ValueError(f"bits_per_name must be one of {BITS_PER_NAME}: {bits_per_name}")
     try:
         index = AstIndex.from_code(code)
     except (SyntaxError, ValueError) as exc:
@@ -118,6 +125,7 @@ def inventory_code(
         guards=guards,
         channels=channels,
         visit_order=linking == "positional",
+        same_kind=same_kind,
     )
     ctx = ReadContext(index, options)
     sites = find_sites(index, ctx=ctx)
@@ -131,7 +139,7 @@ def inventory_code(
     )
     counts = count_by_channel(sites)
     row: dict[str, Any] = {"parse_ok": True, "error": None}
-    row["n_sites_total"] = len(sites) + len(names)
+    row["n_sites_total"] = len(sites) + bits_per_name * len(names)
     row["n_sites_structural"] = len(sites)
     row["n_vars"] = len(names)
     row["n_vars_module"] = sum(1 for n in names if n.unit.is_module)

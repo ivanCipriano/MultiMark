@@ -3,13 +3,16 @@ passo 6, §4.4 punto 1).
 
 ``generate(seed, n_statements)`` costruisce in modo deterministico un modulo con una o più
 funzioni che contengono siti di tutti i canali (1–14) e variabili del canale dei nomi, scritti a
-caso nelle due forme. I frammenti sono codice valido ma non pensato per essere eseguito (i test con
+caso nelle due forme. Con ``name_compares=True`` (opzione ``canonical.same_kind``, [v1.3.2]) ci sono
+anche confronti fra due variabili (``a < b``, ``a == b``); senza, i frammenti sono quelli di
+sempre. I frammenti sono codice valido ma non pensato per essere eseguito (i test con
 esecuzione usano frammenti scritti a mano, ``tests/test_channels_exec.py``).
 """
 
 from __future__ import annotations
 
 import random
+from typing import Optional
 
 WORDS = (
     "item", "count", "total", "value", "index", "result", "score", "name", "size", "level",
@@ -30,9 +33,21 @@ def _fresh(rng: random.Random, used: set[str]) -> str:
             return name
 
 
-def _statement(kind: int, rng: random.Random, used: set[str], ind: str) -> list[str]:
-    """Righe di un'istruzione che contiene un sito del canale ``kind`` (1–14 o 0 = solo nome)."""
+def _statement(
+    kind: int, rng: random.Random, used: set[str], ind: str, bound: Optional[list[str]] = None
+) -> list[str]:
+    """Righe di un'istruzione che contiene un sito del canale ``kind`` (1–14, 0 = solo nome, 15 =
+    confronto fra due variabili già legate in ``bound``). La variabile nuova si aggiunge a
+    ``bound``."""
     v = _fresh(rng, used)
+    if bound is not None:
+        if kind == 15:
+            pool = ["n", "flag", *bound[-6:]]
+            a, b = rng.sample(pool, 2)
+            op = rng.choice(["<", "<=", ">", ">=", "==", "!="])
+            bound.append(v)
+            return [f"{ind}{v} = {a} {op} {b}"]
+        bound.append(v)
     f = rng.random() < 0.5  # forma
     if kind == 1:
         upd = f"{v} = {v} + 1" if f else f"{v} += 2"
@@ -69,10 +84,12 @@ def _statement(kind: int, rng: random.Random, used: set[str], ind: str) -> list[
     return [f"{ind}{v} = n"]  # 0: solo un sito dei nomi
 
 
-def generate(seed: int, n_statements: int = 30, n_functions: int = 1) -> str:
+def generate(
+    seed: int, n_statements: int = 30, n_functions: int = 1, name_compares: bool = False
+) -> str:
     """Modulo con ``n_functions`` funzioni di circa ``n_statements`` istruzioni ciascuna; ogni
     funzione apre con un ``else_return`` in forma 1 o finisce con uno in forma 0, e chiude con un
-    ``return_none``."""
+    ``return_none``. ``name_compares``: aggiunge i confronti fra due variabili (vedi sopra)."""
     rng = random.Random(seed)
     used: set[str] = set()
     out: list[str] = []
@@ -82,8 +99,10 @@ def generate(seed: int, n_statements: int = 30, n_functions: int = 1) -> str:
         er_form1 = rng.random() < 0.5
         if er_form1:
             body += ["    if flag is None:", "        return 0"]
+        kinds = [0, *range(1, 11), 12, 13, *([15] if name_compares else [])]
+        bound: Optional[list[str]] = [] if name_compares else None
         for _ in range(n_statements):
-            body += _statement(rng.choice([0, *range(1, 11), 12, 13]), rng, used, "    ")
+            body += _statement(rng.choice(kinds), rng, used, "    ", bound)
         last = "    return None" if rng.random() < 0.5 else "    return"
         if er_form1:
             body.append(last)

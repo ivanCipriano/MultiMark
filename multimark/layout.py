@@ -3,7 +3,8 @@ maschera (PIPELINE_metodo.md §3.4–3.6, §4.1). È la stessa in inserimento e 
 dipende solo dall'``ast`` del codice, dalla chiave e dalla configurazione.
 
 Un ``Slot`` è un sito strutturale (1 bit, maschera se ``mask=on``) o una variabile del canale dei
-nomi (1 bit con V1b/V2/V2b, 2 bit consecutivi con V1; mai maschera).
+nomi (1 bit con V1b/V2/V2b, 2 bit consecutivi con V1 e con V2 a ``names.bits_per_name = 2``; mai
+maschera).
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from multimark.linking import mask as site_mask
 from multimark.linking import offset, phi_function, phi_positional, phi_single_run
 from multimark.names import (
     NameSite,
-    name_bit,
+    name_bits,
     name_sites,
     name_slot,
     read_style,
@@ -84,12 +85,15 @@ class Layout:
 
     @property
     def n_bits(self) -> int:
-        """``N`` di §3.9: voti potenziali (2 per variabile con V1)."""
+        """``N`` di §3.9: voti potenziali (2 per variabile con V1 e con 2 bit per nome)."""
         return sum(len(s.indices) for s in self.slots)
 
 
 def name_width(cfg: Config) -> int:
-    return 2 if cfg.names_variant == "V1" else 1
+    """Posizioni di bit per variabile: 2 con V1 (stile) e con V2 a 2 bit per nome (MD27)."""
+    if cfg.names_variant == "V1":
+        return 2
+    return cfg.names_bits_per_name if cfg.names_variant == "V2" else 1
 
 
 def read_options(cfg: Config) -> ReadOptions:
@@ -169,12 +173,12 @@ def build_layout(index: AstIndex, cfg: Config, key: int) -> Layout:
 
 
 def name_value(slot: Slot, key: int, cfg: Config) -> Optional[int]:
-    """Valore letto di una variabile: bit (V1b/V2/V2b) o stile a 2 bit (V1); ``None`` se lo
-    stile non si legge."""
+    """Valore letto di una variabile: bit (V1b/V2/V2b), stile a 2 bit (V1) o 2 bit PRF (V2 con
+    ``names.bits_per_name = 2``); ``None`` se lo stile non si legge."""
     assert slot.name is not None
     name = slot.name.name
     if cfg.names_variant in ("V2", "V2b"):
-        return name_bit(key, name)
+        return name_bits(key, name, len(slot.indices))
     if cfg.names_variant == "V1":
         return read_style(name)
     return read_style_v1b(name)
