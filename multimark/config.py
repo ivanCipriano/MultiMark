@@ -71,7 +71,7 @@ class Config:
             if value not in allowed:
                 raise ValueError(f"{name} must be one of {allowed}: {value!r}")
         if self.names_bits_per_name != 1 and self.names_variant != "V2":
-            # TODO(ivan): la pipeline definisce 2 bit per nome solo per V2 (§6.3 [v1.3.1]).
+            # 2 bit per nome solo con V2 (§6.3 [v1.3.1], MD27; confermato da Ivan il 18 novembre).
             raise ValueError("names.bits_per_name=2 requires names.variant=V2")
         if self.canonical_same_kind != "off" and self.canonical != "kind":
             raise ValueError("canonical.same_kind=binding_order requires canonical=kind")

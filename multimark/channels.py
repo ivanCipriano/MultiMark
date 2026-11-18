@@ -133,7 +133,7 @@ class ReadOptions:
         if self.same_kind not in SAME_KIND_MODES:
             raise ValueError(f"same_kind must be one of {SAME_KIND_MODES}: {self.same_kind!r}")
         if self.same_kind != "off" and self.canonical != "kind":
-            # TODO(ivan): la pipeline definisce binding_order solo per la base (canonical=kind).
+            # binding_order solo con canonical=kind (MD28; confermato da Ivan il 18 novembre).
             raise ValueError("canonical.same_kind=binding_order requires canonical=kind")
         if self.channels not in CHANNEL_SET_NAMES:
             raise ValueError(f"channels must be one of {CHANNEL_SET_NAMES}: {self.channels!r}")
