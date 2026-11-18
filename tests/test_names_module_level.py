@@ -5,6 +5,8 @@ Regole (c)–(g) come nelle funzioni, più (h)–(i)."""
 from __future__ import annotations
 
 from multimark._astindex import AstIndex
+from multimark.config import multimark_base
+from multimark.layout import build_layout
 from multimark.names import name_sites
 from multimark.sites import find_sites, loop_form_targets
 from tests.helpers import src
@@ -155,3 +157,19 @@ def test_function_rules_unchanged_when_module_level_on() -> None:
         return result
     """
     assert names(code) == names(code, module_level=False) == [("f", "result")]
+
+
+def test_base_profile_includes_module_variables() -> None:
+    """Decisione O chiusa (v1.3.1): la base di ``multimark`` legge le variabili di modulo."""
+    code = src(
+        """
+        total = 0
+        for item in range(3):
+            total += item
+        """
+    )
+    index = AstIndex.from_code(code)
+    on = build_layout(index, multimark_base(), 7)
+    off = build_layout(index, multimark_base().with_(names_module_level=False), 7)
+    assert sorted(s.name.name for s in on.names if s.name is not None) == ["item", "total"]
+    assert off.names == []

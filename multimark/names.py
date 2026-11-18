@@ -469,9 +469,8 @@ def name_bits(key: int, name: str, n: int = 1) -> int:
     """Lettura V2 con ``names.bits_per_name = n`` (MD27): valore a ``n`` bit dall'ultimo byte di
     ``prf(K, "name", norm(n))``. Con ``n = 1`` è ``name_bit``; con ``n = 2`` il bit alto (prima
     posizione del nome) è ``name_bit`` e il bit basso (seconda posizione) è il bit successivo
-    dello stesso byte. TODO(ivan): la pipeline dice «2 bit PRF del nome normalizzato» senza dire
-    quali; si prendono i due bit meno significativi, così la prima posizione legge lo stesso bit
-    della V2 a 1 bit."""
+    dello stesso byte: i due bit meno significativi, così la prima posizione legge lo stesso bit
+    della V2 a 1 bit (scelta confermata da Ivan il 18 novembre)."""
     if n not in BITS_PER_NAME:
         raise ValueError(f"names.bits_per_name must be one of {BITS_PER_NAME}: {n}")
     byte = prf(key, "name", normalize_name(name))[-1]

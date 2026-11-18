@@ -288,7 +288,8 @@ def _binding_direction(left: ast.Name, right: ast.Name, ctx: ReadContext) -> Opt
     """``canonical.same_kind = binding_order`` (§3.11 [v1.3.2], MD28): per un confronto fra due
     ``Name`` l'operando «minore» è quello il cui primo binding nella funzione (o nel modulo, per il
     codice fuori dalle funzioni) viene prima nell'ordine di visita; i parametri vengono prima delle
-    variabili locali. Non è un sito (``None``) se:
+    variabili locali, anche fra scope diversi (il parametro di una ``lambda`` o di una funzione
+    annidata viene prima di una variabile della funzione esterna). Non è un sito (``None``) se:
 
     - uno dei due nomi non ha binding nello scope dell'unità (builtin, nome non definito, nome di
       modulo letto in una funzione, nome ``global``/``nonlocal``), ha un binding non di variabile

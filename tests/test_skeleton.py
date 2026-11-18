@@ -20,7 +20,7 @@ def test_profiles() -> None:
         "positional", "off", "paper", "V1",
     )  # fmt: skip
     assert mcss.names_include_params is True and mcss.codeword_length == 32
-    assert base.names_module_level is False and mcss.names_module_level is True
+    assert base.names_module_level is True and mcss.names_module_level is True
     assert (base.channels, mcss.channels) == ("extended", "mcss8")
     assert (base.code_matrix, mcss.code_matrix) == ("dmin4", "random")
     assert mcss.read_options.canonical == "paper"

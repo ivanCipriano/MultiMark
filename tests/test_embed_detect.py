@@ -143,7 +143,7 @@ def test_wrong_key_scores_low() -> None:
     [{"linking": "function_single_run"}, {"linking": "positional"}, {"mask": "off"},
      {"canonical": "paper"}, {"names_variant": "V0"}, {"names_variant": "V1"},
      {"names_variant": "V1b"}, {"names_variant": "V2b"}, {"t": 0}, {"t": 4},
-     {"channels": "mcss8"}, {"names_module_level": True}, {"names_include_params": True}],
+     {"channels": "mcss8"}, {"names_module_level": False}, {"names_include_params": True}],
 )  # fmt: skip
 def test_options_roundtrip(changes: dict) -> None:
     cfg = multimark_base().with_(**changes)

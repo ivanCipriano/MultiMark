@@ -32,8 +32,9 @@ class Config:
     names_variant: str = "V2"
     names_proposer: str = "static"  # ``neural`` da P3 (§3.11)
     names_include_params: bool = False
-    # [v1.2] variabili di modulo nel canale dei nomi: decisione O di §7, ``false`` fino ad allora
-    names_module_level: bool = False
+    # [v1.2] variabili di modulo nel canale dei nomi: decisione O di §7, chiusa in v1.3.1 con
+    # ``true`` per la base (``mcss`` ha ``true`` da sempre, MD14)
+    names_module_level: bool = True
     # [v1.2.6] variabili di una lettera (§4.2 punto 9): ``exclude`` per la base (decisione R di §7,
     # in P5), ``extend_except_loop`` per ``mcss`` (esito v1.2.7)
     names_single_letter: str = "exclude"
