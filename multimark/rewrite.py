@@ -27,6 +27,7 @@ from typing import Any, Optional
 
 import libcst as cst
 from libcst.metadata import (
+    ClassScope,
     FunctionScope,
     GlobalScope,
     MetadataWrapper,
@@ -688,6 +689,30 @@ def _subtree_ids(node: cst.CSTNode) -> set[int]:
     return out
 
 
+def _resolves_to(scope: Any, name: str, target: Any) -> bool:
+    """Vero se ``name`` letto in ``scope`` si risolve, con le regole di Python, alla variabile di
+    ``target``: si sale negli scope esterni (saltando i corpi di classe, che dagli scope interni
+    non si vedono) e ci si ferma al primo scope che lega ``name``.
+
+    Serve perché LibCST attacca le letture «precedenti» a un binding locale anche ai binding
+    omonimi dello scope esterno (``Assignment.record_accesses``): in ``def f(n): while n: n //= 2``
+    le letture di ``n`` prima di ``n //= 2`` risultano anche riferimenti della ``n`` di modulo,
+    mentre per Python ``n`` è locale in tutta la funzione."""
+    current = scope
+    while current is not None:
+        if isinstance(current, ClassScope) and current is not scope:
+            current = current.parent
+            continue
+        if current is target:
+            return True
+        if current.assignments[name]:
+            return False
+        if current.parent is current:
+            return False
+        current = current.parent
+    return False
+
+
 def rename_variables(
     code: str, index: AstIndex, renames: list[tuple[NameSite, str]]
 ) -> tuple[str, set[tuple]]:
@@ -733,6 +758,8 @@ def rename_variables(
                     break
                 nodes.append(node)
                 for access in assignment.references:
+                    if not _resolves_to(access.scope, site.name, scope):
+                        continue  # lettura di una variabile omonima di uno scope interno
                     if not isinstance(access.node, cst.Name):
                         ok = False
                         break
