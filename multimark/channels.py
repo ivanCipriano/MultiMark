@@ -37,6 +37,11 @@ siano definite e quelle di non interferenza qui sotto (perimetro confermato da I
 primi binding (``_binding_direction``, scope da ``multimark/scopes.py``). Con ``"off"`` (base) la
 lettura è quella di sempre; con ``canonical="paper"`` l'opzione non è ammessa.
 
+**[v1.3.9] Forme naturali** (``ReadOptions.natural_forms``, opzione ``canonical.natural_forms``,
+MD29): con ``const_left`` nei canali 2, 3 e 6 non è un sito il nodo con un operando costante
+(``is_constant_expr``); con ``const_left_zero`` in più nessun sito nei canali 9 e 10. La condizione
+guarda solo gli operandi, che lo scambio non cambia: l'insieme dei siti è lo stesso nelle due forme.
+
 **Non interferenza (§3.3.2 punto 3).** Oltre alla regola «un nodo appartiene al più a un sito, vince
 il canale con numero minore» (applicata in ``sites.py`` con gli insiemi ``owned``), alcune
 condizioni sono scritte in modo da valere **in entrambe le forme**, perché cambiare la forma di un
@@ -102,6 +107,8 @@ CHANNEL_SET_NAMES = ("mcss8", "extended", "extended+str")
 CANONICAL_MODES = ("kind", "paper")
 #: Valori di ``canonical.same_kind`` (§3.11 [v1.3.2], MD28).
 SAME_KIND_MODES = ("off", "binding_order")
+#: Valori di ``canonical.natural_forms`` (§3.11 [v1.3.9], MD29).
+NATURAL_FORMS_MODES = ("off", "const_left", "const_left_zero")
 
 
 @dataclass(frozen=True)
@@ -119,6 +126,10 @@ class ReadOptions:
       ``"binding_order"``: nei canali 2 e 3 un confronto fra due ``Name`` è un sito, con forma
       canonica dall'ordine dei primi binding (``_binding_direction``). Solo con
       ``canonical="kind"``.
+    - ``natural_forms`` (``canonical.natural_forms``, [v1.3.9], MD29): ``"off"`` (base),
+      ``"const_left"`` (nei canali 2, 3 e 6 nessun sito se un operando è un'espressione costante,
+      ``is_constant_expr``: una delle due forme la metterebbe a sinistra) o ``"const_left_zero"``
+      (in più nessun sito ``range_zero`` né ``slice_lower``). Solo con ``canonical="kind"``.
     """
 
     canonical: str = "kind"
@@ -126,6 +137,7 @@ class ReadOptions:
     channels: str = "extended"
     visit_order: bool = False
     same_kind: str = "off"
+    natural_forms: str = "off"
 
     def __post_init__(self) -> None:
         if self.canonical not in CANONICAL_MODES:
@@ -135,6 +147,12 @@ class ReadOptions:
         if self.same_kind != "off" and self.canonical != "kind":
             # binding_order solo con canonical=kind (MD28; confermato da Ivan il 18 novembre).
             raise ValueError("canonical.same_kind=binding_order requires canonical=kind")
+        if self.natural_forms not in NATURAL_FORMS_MODES:
+            raise ValueError(
+                f"natural_forms must be one of {NATURAL_FORMS_MODES}: {self.natural_forms!r}"
+            )
+        if self.natural_forms != "off" and self.canonical != "kind":
+            raise ValueError("canonical.natural_forms requires canonical=kind")
         if self.channels not in CHANNEL_SET_NAMES:
             raise ValueError(f"channels must be one of {CHANNEL_SET_NAMES}: {self.channels!r}")
         if self.channels not in CHANNEL_SETS:
@@ -144,6 +162,16 @@ class ReadOptions:
     @property
     def active(self) -> tuple[str, ...]:
         return CHANNEL_SETS[self.channels]
+
+    @property
+    def no_const_operand(self) -> bool:
+        """MD29: nessun sito con un operando costante nei canali 2, 3 e 6."""
+        return self.natural_forms != "off"
+
+    @property
+    def no_explicit_zero(self) -> bool:
+        """MD29 con ``const_left_zero``: nessun sito ``range_zero`` né ``slice_lower``."""
+        return self.natural_forms == "const_left_zero"
 
 
 @dataclass(frozen=True)
@@ -261,6 +289,20 @@ _ORDER_OPS = (ast.Lt, ast.LtE, ast.Gt, ast.GtE)
 _EQUALITY_OPS = (ast.Eq, ast.NotEq)
 
 
+def is_constant_expr(expr: ast.AST) -> bool:
+    """Espressione costante (MD29): solo ``Constant``, ``UnaryOp``, ``BinOp`` e ``Tuple`` di
+    costanti (``0``, ``-1``, ``10**9 + 7``, ``"a"``, ``(1, 2)``)."""
+    if isinstance(expr, ast.Constant):
+        return True
+    if isinstance(expr, ast.UnaryOp):
+        return is_constant_expr(expr.operand)
+    if isinstance(expr, ast.BinOp):
+        return is_constant_expr(expr.left) and is_constant_expr(expr.right)
+    if isinstance(expr, ast.Tuple):
+        return all(is_constant_expr(e) for e in expr.elts)
+    return False
+
+
 def _is_none_or_bool(expr: ast.AST) -> bool:
     return isinstance(expr, ast.Constant) and (expr.value is None or isinstance(expr.value, bool))
 
@@ -372,6 +414,8 @@ def _recognize_compare(
         return None
     if ctx.guards and not (ctx.pure(left) or ctx.pure(right)):
         return None
+    if ctx.options.no_const_operand and (is_constant_expr(left) or is_constant_expr(right)):
+        return None  # MD29: una delle due forme metterebbe la costante a sinistra
     value = _direction(left, right, ctx)
     if value is None:
         return None
@@ -577,6 +621,12 @@ def recognize_operand_order(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     lc, rc = is_numeric_constant(node.left), is_numeric_constant(node.right)
     if lc == rc:
         return None
+    if ctx.options.no_const_operand and (
+        is_constant_expr(node.left) or is_constant_expr(node.right)
+    ):
+        # MD29: stessa regola dei confronti (oggi ogni sito di questo canale ha una costante
+        # numerica da un lato, quindi con l'opzione attiva il canale resta vuoto)
+        return None
     other = node.left if rc else node.right
     if ctx.guards:
         if kind(other) not in (1, 2, 3):
@@ -658,6 +708,8 @@ def _int_const(expr: ast.AST, value: int) -> bool:
 
 def recognize_range_zero(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     """Canale 9: ``range(0, n)`` (forma 0) o ``range(n)`` (forma 1), §3.3.1b."""
+    if ctx.options.no_explicit_zero:
+        return None  # MD29, natural_forms=const_left_zero
     if not (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
@@ -681,6 +733,8 @@ def recognize_range_zero(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
 
 def recognize_slice_lower(node: ast.AST, ctx: ReadContext) -> Optional[Match]:
     """Canale 10: ``a[0:n]``, ``a[0:]`` (forma 0) o ``a[:n]``, ``a[:]`` (forma 1), §3.3.1b."""
+    if ctx.options.no_explicit_zero:
+        return None  # MD29, natural_forms=const_left_zero
     if not (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Slice)):
         return None
     sl = node.slice

@@ -20,7 +20,7 @@ from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any, Optional
 
-from multimark.channels import CANONICAL_MODES, SAME_KIND_MODES
+from multimark.channels import CANONICAL_MODES, NATURAL_FORMS_MODES, SAME_KIND_MODES
 from multimark.inventory import STAT_COLUMNS, format_summary, inventory_code, summarize
 from multimark.linking import LINKING_MODES
 from multimark.names import BITS_PER_NAME, NAME_VARIANTS, SINGLE_LETTER_MODES
@@ -97,6 +97,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="comparisons between two names in channels 2-3 (canonical.same_kind; binding_order "
         "needs --canonical kind; default: off)",
     )
+    p.add_argument(
+        "--natural-forms",
+        choices=NATURAL_FORMS_MODES,
+        default="off",
+        help="no site with a constant operand in channels 2, 3, 6; const_left_zero also drops "
+        "range_zero and slice_lower (canonical.natural_forms; needs --canonical kind; "
+        "default: off)",
+    )
     return p
 
 
@@ -125,6 +133,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     if args.same_kind != "off" and args.canonical != "kind":
         parser.error("--same-kind binding_order requires --canonical kind")
+    if args.natural_forms != "off" and args.canonical != "kind":
+        parser.error("--natural-forms requires --canonical kind")
     rows: list[dict[str, Any]] = []
     for obj in _read_jsonl(args.input):
         code = obj.get(args.code_field)
@@ -142,6 +152,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             name_variant=args.name_variant,
             bits_per_name=args.bits_per_name,
             same_kind=args.same_kind,
+            natural_forms=args.natural_forms,
         )
         if args.id_field:
             row = {args.id_field: obj.get(args.id_field), **row}
@@ -161,13 +172,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "bits_per_name": args.bits_per_name,
         "same_kind": args.same_kind,
     }
+    # MD29: solo se attiva, così il riepilogo delle chiamate senza l'opzione resta quello di prima
+    natural = f" natural_forms={args.natural_forms}" if args.natural_forms != "off" else ""
+    if natural:
+        summary["options"]["natural_forms"] = args.natural_forms
     text = format_summary(summary, args.label)
     text += (
         f"\noptions: canonical={args.canonical} guards={not args.no_guards} "
         f"include_params={args.include_params} module_level={args.module_level} "
         f"channels={args.channels} single_letter={args.single_letter} "
         f"linking={args.linking} name_variant={args.name_variant} "
-        f"bits_per_name={args.bits_per_name} same_kind={args.same_kind}\n"
+        f"bits_per_name={args.bits_per_name} same_kind={args.same_kind}{natural}\n"
     )
     if args.summary:
         args.summary.parent.mkdir(parents=True, exist_ok=True)

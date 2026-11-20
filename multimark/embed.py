@@ -7,7 +7,9 @@ Passi:
 2. **nomi**: per ogni variabile, il nome che porta i bit richiesti (V2: il bit di
    ``prf_bit(K, "name", norm(n))``, o i 2 bit di ``names.name_bits`` con
    ``names.bits_per_name = 2``, MD27; V1/V1b: lo stile; V2b: candidato con ``cw[phi] == bit``); la
-   rinomina si scrive con LibCST (``ScopeProvider``);
+   rinomina si scrive con LibCST (``ScopeProvider``). Con ``names.suffix_by_type = on`` (MD30)
+   i candidati si filtrano con il tipo dedotto (``names.filter_by_type``); se nessuno ha i bit
+   giusti si usa l'elenco completo senza ``the_``, contato in ``n_names_type_fallback``;
 3. **siti strutturali**, sul codice già rinominato (con ``canonical="paper"`` la forma canonica
    dipende dai nomi): forma ``cw[phi(s)] XOR mask(s)``, scritta con LibCST;
 4. rilettura completa (§3.3.3): un sito strutturale con valore diverso da quello richiesto si
@@ -39,6 +41,8 @@ from multimark.names import (
     RETRY_SUFFIXES,
     Proposer,
     StaticProposer,
+    deduce_type,
+    filter_by_type,
     first_binding_value,
     identifiers_in,
     name_bit,
@@ -52,6 +56,7 @@ from multimark.names import (
     styles_of_variant,
     type_suffix,
     valid_new_name,
+    without_excluded_prefix,
 )
 from multimark.rewrite import RewriteError, WriteRequest, rename_variables, write_structural
 
@@ -87,6 +92,8 @@ def default_proposer(cfg: Config) -> Proposer:
 class _NameChoice:
     new: Optional[str]  # None = il nome originale porta già i bit richiesti
     reason: str = "ok"  # ok | no_candidate | unwritable
+    #: MD30 regola (a): nessun candidato filtrato per tipo andava bene, scelto dall'elenco completo
+    type_fallback: bool = False
 
 
 def _choose_name(
@@ -120,10 +127,24 @@ def _choose_name(
         func = site.unit.name
         # Anche i nomi di una lettera (names.single_letter) seguono questa regola.
         # Prima i primi 8 candidati (§3.6.4); se nessuno ha il bit giusto, fino a 32.
+        by_type = cfg.names_suffix_by_type == "on"
+        typ = deduce_type(index, site) if by_type else None
         for k in (BASE_CANDIDATES, MAX_CANDIDATES):
-            for cand in proposer.propose(code, func, name, k=k):
+            cands = proposer.propose(code, func, name, k=k)
+            if by_type:
+                # MD30: suffissi coerenti con il tipo dedotto, senza il prefisso ``the_``
+                cands = filter_by_type(cands, name, typ)
+            for cand in cands:
                 if valid_new_name(cand, name, used) and good(cand):
                     return _NameChoice(cand)
+        if by_type:
+            # MD30 regola (a): elenco completo di oggi (senza ``the_``, regola (b)); la lettura
+            # non cambia, perché prende il bit dal nome
+            for cand in without_excluded_prefix(
+                proposer.propose(code, func, name, k=MAX_CANDIDATES)
+            ):
+                if valid_new_name(cand, name, used) and good(cand):
+                    return _NameChoice(cand, type_fallback=True)
         return _NameChoice(None, "no_candidate")
     # V1 (2 bit di stile) e V1b (snake/camel)
     if variant == "V1":
@@ -202,6 +223,8 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
     }
     if n_bits == 0:
         extra.update(skipped_sites=0, n_renamed=0, n_names_no_candidate=0, n_names_unwritable=0)
+        if cfg.names_suffix_by_type == "on":
+            extra["n_names_type_fallback"] = 0
         return EmbedResult(code, "FAILED", "no_sites", extra)
 
     excluded_sites: set[tuple] = set()
@@ -210,7 +233,7 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
         # 2. nomi
         scope_names = _ScopeNames(index0)
         renames = []
-        no_candidate = unwritable_names = 0
+        no_candidate = unwritable_names = type_fallback = 0
         chosen: dict[tuple, str] = {}
         for slot in layout0.names:
             assert slot.name is not None
@@ -222,6 +245,8 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
             choice = _choose_name(slot, cw, key, cfg, code, index0, pool, proposer)
             if choice.reason == "no_candidate":
                 no_candidate += 1
+            if choice.type_fallback:
+                type_fallback += 1
             elif choice.reason == "unwritable":
                 unwritable_names += 1
             if choice.new is not None:
@@ -295,6 +320,11 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
                 n_names_wrong=_wrong_names(layout2, cw, key, cfg),
                 n_names_unread=sum(1 for s in layout2.names if name_value(s, key, cfg) is None),
             )
+            if cfg.names_suffix_by_type == "on":
+                # MD30 regola (a): nomi scelti dall'elenco completo perché nessun candidato
+                # filtrato per tipo aveva i bit giusti (solo con l'opzione attiva: con ``off`` il
+                # registro resta quello di prima)
+                extra["n_names_type_fallback"] = type_fallback
             status = "OK" if n_bits >= b else "PARTIAL"
             return EmbedResult(code2, status, None, extra)
         excluded_sites |= bad_sites

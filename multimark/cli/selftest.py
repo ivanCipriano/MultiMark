@@ -19,6 +19,9 @@ Per ``--fragments`` frammenti sintetici (``multimark.synthetic``) e ``--keys`` c
 Opzioni del profilo ``multimark`` ([v1.3.2]; ``mcss`` non cambia): ``--bits-per-name``
 (``names.bits_per_name``) e ``--same-kind`` (``canonical.same_kind``); con ``--same-kind`` diverso
 da ``off`` i frammenti contengono anche confronti fra due variabili (per entrambi i profili).
+[v1.3.9]: ``--natural-forms`` (``canonical.natural_forms``, MD29) e ``--suffix-by-type``
+(``names.suffix_by_type``, MD30); i frammenti non cambiano. Con ``--suffix-by-type on`` il
+riepilogo riporta anche i nomi scelti dall'elenco completo (``n_names_type_fallback``).
 
 Uso::
 
@@ -46,22 +49,33 @@ from typing import Any, Optional
 
 from multimark import __version__
 from multimark._astindex import AstIndex
-from multimark.channels import SAME_KIND_MODES
+from multimark.channels import NATURAL_FORMS_MODES, SAME_KIND_MODES
 from multimark.codec import ERASURE, encode
 from multimark.config import Config, mcss_profile, multimark_base
 from multimark.detect import _majority, detect
 from multimark.embed import embed
 from multimark.layout import build_layout, read_votes
-from multimark.names import BITS_PER_NAME
+from multimark.names import BITS_PER_NAME, SUFFIX_BY_TYPE_MODES
 from multimark.prf import derive_seed
 from multimark.synthetic import generate
 
 PROFILES = {"multimark": multimark_base(), "mcss": mcss_profile()}
 
 
-def profiles(bits_per_name: int = 1, same_kind: str = "off") -> dict[str, Config]:
-    """Profili con le opzioni [v1.3.2] applicate a ``multimark`` (``mcss`` resta quello di §4)."""
-    base = multimark_base().with_(names_bits_per_name=bits_per_name, canonical_same_kind=same_kind)
+def profiles(
+    bits_per_name: int = 1,
+    same_kind: str = "off",
+    natural_forms: str = "off",
+    suffix_by_type: str = "off",
+) -> dict[str, Config]:
+    """Profili con le opzioni [v1.3.2] e [v1.3.9] applicate a ``multimark`` (``mcss`` resta quello
+    di §4)."""
+    base = multimark_base().with_(
+        names_bits_per_name=bits_per_name,
+        canonical_same_kind=same_kind,
+        canonical_natural_forms=natural_forms,
+        names_suffix_by_type=suffix_by_type,
+    )
     return {"multimark": base, "mcss": mcss_profile()}
 
 
@@ -125,10 +139,11 @@ def formatters() -> dict[str, Any]:
 
 def run_case(task: tuple) -> dict[str, Any]:
     """Un caso: ``(profilo, seme del frammento, indice della chiave)``, più facoltativi i bit per
-    nome e ``same_kind`` del profilo ``multimark``."""
+    nome, ``same_kind``, ``natural_forms`` e ``suffix_by_type`` del profilo ``multimark``."""
     profile, frag_seed, key_index, *opts = task
-    bits_per_name, same_kind = opts if opts else (1, "off")
-    cfg = profiles(bits_per_name, same_kind)[profile]
+    full = [*opts, *(1, "off", "off", "off")[len(opts) :]]
+    bits_per_name, same_kind, natural_forms, suffix_by_type = full
+    cfg = profiles(bits_per_name, same_kind, natural_forms, suffix_by_type)[profile]
     method = "mcss" if profile == "mcss" else "multimark"
     code = fragment(frag_seed, name_compares=same_kind != "off")
     rng = random.Random(derive_seed("p1-selftest-key", frag_seed, key_index))
@@ -156,6 +171,7 @@ def run_case(task: tuple) -> dict[str, Any]:
         skipped=r.extra["skipped_sites"],
         wrong_names=wrong,
         no_candidate=r.extra["n_names_no_candidate"],
+        type_fallback=r.extra.get("n_names_type_fallback", 0),
         n_erased=n_erased,
         n_errors=n_errors,
         within_limit=n_errors + n_erased <= 3,
@@ -178,10 +194,16 @@ def run_case(task: tuple) -> dict[str, Any]:
     return out
 
 
-def timing(repeats: int = 5, bits_per_name: int = 1, same_kind: str = "off") -> dict[str, float]:
+def timing(
+    repeats: int = 5,
+    bits_per_name: int = 1,
+    same_kind: str = "off",
+    natural_forms: str = "off",
+    suffix_by_type: str = "off",
+) -> dict[str, float]:
     code = generate(424242, 60, 1, name_compares=same_kind != "off")
     out: dict[str, float] = {"lines": float(len(code.splitlines()))}
-    for profile, cfg in profiles(bits_per_name, same_kind).items():
+    for profile, cfg in profiles(bits_per_name, same_kind, natural_forms, suffix_by_type).items():
         method = "mcss" if profile == "mcss" else "multimark"
         t0 = time.perf_counter()
         for k in range(repeats):
@@ -227,13 +249,23 @@ def coverage_lines(ok: list[dict[str, Any]], b: int) -> list[str]:
     return out
 
 
+def _new_options(args: argparse.Namespace) -> str:
+    """Opzioni [v1.3.9] nell'intestazione, solo se attive (l'intestazione di prima non cambia)."""
+    out = ""
+    if args.natural_forms != "off":
+        out += f" canonical.natural_forms={args.natural_forms}"
+    if args.suffix_by_type != "off":
+        out += f" names.suffix_by_type={args.suffix_by_type}"
+    return out
+
+
 def summarize(results: list[dict[str, Any]], args: argparse.Namespace, secs: float) -> str:
     lines = [
         "P1 self-test of multimark (python -m multimark.cli.selftest)",
         f"library {__version__}; python {platform.python_version()}; "
         f"fragments={args.fragments} keys={args.keys}; wall time {secs:.0f} s",
         f"multimark options: names.bits_per_name={args.bits_per_name} "
-        f"canonical.same_kind={args.same_kind} (mcss unchanged)",
+        f"canonical.same_kind={args.same_kind}{_new_options(args)} (mcss unchanged)",
         "",
     ]
     for profile in PROFILES:
@@ -250,6 +282,15 @@ def summarize(results: list[dict[str, Any]], args: argparse.Namespace, secs: flo
             f"name sites without candidate (total): {sum(r['no_candidate'] for r in ok)} "
             f"in {sum(r['no_candidate'] > 0 for r in ok)} cases; wrong name votes (total): "
             f"{sum(r['wrong_names'] for r in ok)}",
+            *(
+                [
+                    f"names from the full list (suffix_by_type fallback, total): "
+                    f"{sum(r['type_fallback'] for r in ok)} in "
+                    f"{sum(r['type_fallback'] > 0 for r in ok)} cases"
+                ]
+                if args.suffix_by_type != "off" and profile == "multimark"
+                else []
+            ),  # fmt: skip
             f"comparison: agreement == N - wrong_names in {sum(r['agreement_ok'] for r in ok)}"
             f"/{len(ok)}",
             f"N >= B: {len(big)} cases; all B positions covered: {len(big_cov)}; decoded == m: "
@@ -285,8 +326,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                    help="names.bits_per_name of the multimark profile (default: 1)")  # fmt: skip
     p.add_argument("--same-kind", choices=SAME_KIND_MODES, default="off",
                    help="canonical.same_kind of the multimark profile (default: off)")  # fmt: skip
+    p.add_argument("--natural-forms", choices=NATURAL_FORMS_MODES, default="off",
+                   help="canonical.natural_forms of multimark (default: off)")  # fmt: skip
+    p.add_argument("--suffix-by-type", choices=SUFFIX_BY_TYPE_MODES, default="off",
+                   help="names.suffix_by_type of the multimark profile (default: off)")  # fmt: skip
     args = p.parse_args(argv)
-    opts = (args.bits_per_name, args.same_kind)
+    opts = (args.bits_per_name, args.same_kind, args.natural_forms, args.suffix_by_type)
     tasks = [(prof, f, k, *opts) for prof in PROFILES for f in range(args.fragments)
              for k in range(args.keys)]  # fmt: skip
     t0 = time.perf_counter()
@@ -296,7 +341,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     else:
         results = [run_case(t) for t in tasks]
     text = summarize(results, args, time.perf_counter() - t0)
-    tm = timing(bits_per_name=args.bits_per_name, same_kind=args.same_kind)
+    tm = timing(
+        bits_per_name=args.bits_per_name,
+        same_kind=args.same_kind,
+        natural_forms=args.natural_forms,
+        suffix_by_type=args.suffix_by_type,
+    )
     text += (
         f"timing: file of {tm['lines']:.0f} lines, embed + detect (registry 1/16/1024): "
         f"multimark {tm['multimark']:.3f} s, mcss {tm['mcss']:.3f} s (criterion < 1 s)\n"

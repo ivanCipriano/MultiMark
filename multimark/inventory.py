@@ -106,6 +106,7 @@ def inventory_code(
     name_variant: str = "V2",
     bits_per_name: int = 1,
     same_kind: str = "off",
+    natural_forms: str = "off",
 ) -> dict[str, Any]:
     """Riga dell'inventario per un campione. ``parse_ok=False`` se ``ast.parse`` fallisce.
 
@@ -113,7 +114,9 @@ def inventory_code(
     ``list_comp`` con ``linking=positional``; MD20 per i nomi con V1/V1b): per contare i siti di
     ``mcss`` si passano ``linking="positional"`` e ``name_variant="V1"``. ``bits_per_name``
     (``names.bits_per_name``, MD27) entra solo in ``n_sites_total``; ``same_kind``
-    (``canonical.same_kind``, MD28) aggiunge i confronti fra due ``Name`` ai canali 2 e 3."""
+    (``canonical.same_kind``, MD28) aggiunge i confronti fra due ``Name`` ai canali 2 e 3;
+    ``natural_forms`` (``canonical.natural_forms``, MD29) toglie i siti con un operando costante
+    (canali 2, 3, 6) e, con ``const_left_zero``, quelli di ``range_zero`` e ``slice_lower``."""
     if bits_per_name not in BITS_PER_NAME:
         raise ValueError(f"bits_per_name must be one of {BITS_PER_NAME}: {bits_per_name}")
     try:
@@ -126,6 +129,7 @@ def inventory_code(
         channels=channels,
         visit_order=linking == "positional",
         same_kind=same_kind,
+        natural_forms=natural_forms,
     )
     ctx = ReadContext(index, options)
     sites = find_sites(index, ctx=ctx)

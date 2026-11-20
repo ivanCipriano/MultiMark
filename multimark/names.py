@@ -649,3 +649,128 @@ class StaticProposer:
             if len(out) == k:
                 break
         return out
+
+
+# ------------------------------------------------- suffissi filtrati per tipo (MD30, [v1.3.9])
+
+#: Valori di ``names.suffix_by_type`` (§3.11 [v1.3.9], MD30).
+SUFFIX_BY_TYPE_MODES = ("off", "on")
+#: Suffissi ammessi per ogni tipo, tipo ignoto compreso.
+NEUTRAL_SUFFIXES = frozenset(
+    ("value", "val", "res", "tmp", "var", "ref", "cur", "new", "prev", "next", "last", "orig",
+     "out")
+)  # fmt: skip
+#: Suffissi ammessi in più, per tipo dedotto (``deduce_type``).
+TYPED_SUFFIXES: dict[str, frozenset[str]] = {
+    "int": frozenset(("count", "num", "size", "total", "step", "acc")),
+    "index": frozenset(("idx", "count", "num", "step")),
+    "float": frozenset(("num", "total", "acc", "step")),
+    "str": frozenset(("key", "part", "info")),
+    "list": frozenset(("list", "seq", "buf", "data", "acc", "part")),
+    "dict": frozenset(("data", "info")),
+    "set": frozenset(("data",)),
+    "element": frozenset(("item", "elem", "entry", "key")),
+    "bool": frozenset(),
+}
+#: Parole di tipo: se il nome normalizzato ne contiene una, sono ammessi solo i suffissi neutri.
+TYPE_WORDS = frozenset(
+    ("count", "list", "str", "map", "flag", "idx", "num", "size", "total", "dict", "set", "len",
+     "cnt", "arr", "lst")
+)  # fmt: skip
+_INT_CALLS = frozenset(("len", "int", "sum", "abs", "ord"))
+_NAMED_CALL_TYPES = {"float": "float", "str": "str", "input": "str", "list": "list",
+                     "sorted": "list", "dict": "dict", "set": "set", "bool": "bool"}  # fmt: skip
+_STR_METHODS = frozenset(("strip", "rstrip", "lstrip", "lower", "upper", "join", "replace",
+                          "format"))  # fmt: skip
+#: Prefisso escluso con ``names.suffix_by_type = on``.
+EXCLUDED_PREFIX = "the_"
+
+
+def value_type(value: Optional[ast.AST]) -> Optional[str]:
+    """Tipo di un valore dal solo codice letto (MD30): letterali, comprehension, ``not``/confronti
+    e chiamate note; ``None`` se non si deduce."""
+    if isinstance(value, ast.Constant):
+        v = value.value
+        if isinstance(v, bool):
+            return "bool"
+        if isinstance(v, int):
+            return "int"
+        if isinstance(v, float):
+            return "float"
+        if isinstance(v, str):
+            return "str"
+        return None
+    if isinstance(value, (ast.List, ast.ListComp)):
+        return "list"
+    if isinstance(value, (ast.Dict, ast.DictComp)):
+        return "dict"
+    if isinstance(value, (ast.Set, ast.SetComp)):
+        return "set"
+    if isinstance(value, (ast.Compare, ast.BoolOp)) or (
+        isinstance(value, ast.UnaryOp) and isinstance(value.op, ast.Not)
+    ):
+        return "bool"
+    if isinstance(value, ast.Call):
+        func = value.func
+        if isinstance(func, ast.Name):
+            if func.id in _INT_CALLS:
+                return "int"
+            return _NAMED_CALL_TYPES.get(func.id)
+        if isinstance(func, ast.Attribute):
+            if func.attr == "split":
+                return "list"
+            if func.attr in _STR_METHODS:
+                return "str"
+    return None
+
+
+def deduce_type(index: AstIndex, site: NameSite) -> Optional[str]:
+    """Tipo della variabile sito (MD30): ``index`` per il bersaglio di ``for … in range(…)``,
+    ``element`` per il bersaglio di un altro ``for``, altrimenti il tipo del valore del primo
+    binding (``value_type``); ``None`` (ignoto) se non si deduce."""
+    if site.position >= 0:
+        node = index.order[site.position]
+        parent = index.parent_of(node)
+        if isinstance(parent, (ast.For, ast.AsyncFor)) and parent.target is node:
+            it = parent.iter
+            if isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id == "range":
+                return "index"
+            return "element"
+    return value_type(first_binding_value(index, site))
+
+
+def allowed_suffixes(var_name: str, typ: Optional[str]) -> frozenset[str]:
+    """Suffissi ammessi per ``var_name`` col tipo ``typ`` (MD30): i neutri, più quelli del tipo se
+    il tipo è noto e il nome normalizzato non contiene già una parola di tipo."""
+    words = set(normalize_name(var_name).split("_"))
+    if typ is None or words & TYPE_WORDS:
+        return NEUTRAL_SUFFIXES
+    return NEUTRAL_SUFFIXES | TYPED_SUFFIXES.get(typ, frozenset())
+
+
+def filter_by_type(candidates: Sequence[str], var_name: str, typ: Optional[str]) -> list[str]:
+    """Candidati ammessi da ``names.suffix_by_type = on`` (MD30), nello stesso ordine: un
+    candidato ``norm(n) + "_" + suffisso`` resta solo se il suffisso è fra ``allowed_suffixes``;
+    un candidato con il prefisso ``the_`` non resta mai; gli altri (sinonimi, ``cur_``, ``new_``)
+    restano."""
+    base = normalize_name(var_name)
+    ok = allowed_suffixes(var_name, typ)
+    out = []
+    for cand in candidates:
+        if cand.startswith(EXCLUDED_PREFIX):
+            continue
+        if cand.startswith(base + "_"):
+            suffix = cand[len(base) + 1 :]
+            if suffix in _ALL_SUFFIXES and suffix not in ok:
+                continue
+        out.append(cand)
+    return out
+
+
+def without_excluded_prefix(candidates: Sequence[str]) -> list[str]:
+    """Elenco completo di ripiego con ``names.suffix_by_type = on`` (MD30, regola (a)): i
+    candidati di sempre, senza il prefisso ``the_`` (regola (b))."""
+    return [c for c in candidates if not c.startswith(EXCLUDED_PREFIX)]
+
+
+_ALL_SUFFIXES = frozenset((*SUFFIXES, *EXTRA_SUFFIXES))
