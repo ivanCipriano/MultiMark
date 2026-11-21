@@ -9,7 +9,9 @@ Passi:
    ``names.bits_per_name = 2``, MD27; V1/V1b: lo stile; V2b: candidato con ``cw[phi] == bit``); la
    rinomina si scrive con LibCST (``ScopeProvider``). Con ``names.suffix_by_type = on`` (MD30)
    i candidati si filtrano con il tipo dedotto (``names.filter_by_type``); se nessuno ha i bit
-   giusti si usa l'elenco completo senza ``the_``, contato in ``n_names_type_fallback``;
+   giusti si usa l'elenco completo senza ``the_``, contato in ``n_names_type_fallback``. Con
+   ``names.proposer = neural`` (MD31) i candidati sono i 16 nomi del modello; se nessuno ha i bit
+   giusti, per quel nome si usano i candidati statici, contato in ``n_names_neural_fallback``;
 3. **siti strutturali**, sul codice già rinominato (con ``canonical="paper"`` la forma canonica
    dipende dai nomi): forma ``cw[phi(s)] XOR mask(s)``, scritta con LibCST;
 4. rilettura completa (§3.3.3): un sito strutturale con valore diverso da quello richiesto si
@@ -26,8 +28,8 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from dataclasses import dataclass, field, replace
+from typing import Any, Callable, Optional, Union
 
 from multimark import __version__
 from multimark._astindex import AstIndex
@@ -39,6 +41,7 @@ from multimark.names import (
     BASE_CANDIDATES,
     MAX_CANDIDATES,
     RETRY_SUFFIXES,
+    NameSite,
     Proposer,
     StaticProposer,
     deduce_type,
@@ -58,6 +61,7 @@ from multimark.names import (
     valid_new_name,
     without_excluded_prefix,
 )
+from multimark.names_neural import NeuralProposer, shared_proposer
 from multimark.rewrite import RewriteError, WriteRequest, rename_variables, write_structural
 
 EMBED_STATUSES = ("OK", "PARTIAL", "FAILED")
@@ -83,9 +87,11 @@ def message_to_bits(message: Union[str, Sequence[int]], n: int) -> list[int]:
 
 
 def default_proposer(cfg: Config) -> Proposer:
+    """Proponente di ``names.proposer``: ``static`` o ``neural`` (MD31, modello di base caricato una
+    volta per processo; il benchmark può passare il suo ``NeuralProposer`` a ``embed``)."""
     if cfg.names_proposer == "static":
         return StaticProposer()
-    raise NotImplementedError("names.proposer=neural arrives in P3 (names_neural.py)")
+    return shared_proposer()
 
 
 @dataclass
@@ -94,6 +100,41 @@ class _NameChoice:
     reason: str = "ok"  # ok | no_candidate | unwritable
     #: MD30 regola (a): nessun candidato filtrato per tipo andava bene, scelto dall'elenco completo
     type_fallback: bool = False
+    #: MD31: nessun candidato neurale aveva i bit giusti, scelto fra i candidati statici
+    neural_fallback: bool = False
+
+
+_STATIC = StaticProposer()
+
+
+def _choose_static(
+    site: NameSite,
+    good: Callable[[str], bool],
+    cfg: Config,
+    code: str,
+    typ: Optional[str],
+    used: set[str],
+    proposer: Proposer,
+) -> _NameChoice:
+    """Candidati a passi (§3.6.4): prima i primi 8; se nessuno ha i bit giusti, fino a 32."""
+    name, func = site.name, site.unit.name
+    by_type = cfg.names_suffix_by_type == "on"
+    # Anche i nomi di una lettera (names.single_letter) seguono questa regola.
+    for k in (BASE_CANDIDATES, MAX_CANDIDATES):
+        cands = proposer.propose(code, func, name, k=k)
+        if by_type:
+            # MD30: suffissi coerenti con il tipo dedotto, senza il prefisso ``the_``
+            cands = filter_by_type(cands, name, typ)
+        for cand in cands:
+            if valid_new_name(cand, name, used) and good(cand):
+                return _NameChoice(cand)
+    if by_type:
+        # MD30 regola (a): elenco completo di oggi (senza ``the_``, regola (b)); la lettura
+        # non cambia, perché prende il bit dal nome
+        for cand in without_excluded_prefix(proposer.propose(code, func, name, k=MAX_CANDIDATES)):
+            if valid_new_name(cand, name, used) and good(cand):
+                return _NameChoice(cand, type_fallback=True)
+    return _NameChoice(None, "no_candidate")
 
 
 def _choose_name(
@@ -125,27 +166,20 @@ def _choose_name(
         if good(name):
             return _NameChoice(None)
         func = site.unit.name
-        # Anche i nomi di una lettera (names.single_letter) seguono questa regola.
-        # Prima i primi 8 candidati (§3.6.4); se nessuno ha il bit giusto, fino a 32.
         by_type = cfg.names_suffix_by_type == "on"
         typ = deduce_type(index, site) if by_type else None
-        for k in (BASE_CANDIDATES, MAX_CANDIDATES):
-            cands = proposer.propose(code, func, name, k=k)
+        if isinstance(proposer, NeuralProposer):
+            # MD31: un solo elenco neurale di ``n_candidates`` nomi, nell'ordine del modello; se
+            # nessuno ha i bit giusti, per questo nome i candidati statici (contato)
+            cands = proposer.propose(code, func, name, k=proposer.n_candidates)
             if by_type:
-                # MD30: suffissi coerenti con il tipo dedotto, senza il prefisso ``the_``
                 cands = filter_by_type(cands, name, typ)
             for cand in cands:
                 if valid_new_name(cand, name, used) and good(cand):
                     return _NameChoice(cand)
-        if by_type:
-            # MD30 regola (a): elenco completo di oggi (senza ``the_``, regola (b)); la lettura
-            # non cambia, perché prende il bit dal nome
-            for cand in without_excluded_prefix(
-                proposer.propose(code, func, name, k=MAX_CANDIDATES)
-            ):
-                if valid_new_name(cand, name, used) and good(cand):
-                    return _NameChoice(cand, type_fallback=True)
-        return _NameChoice(None, "no_candidate")
+            fallback = _choose_static(site, good, cfg, code, typ, used, _STATIC)
+            return replace(fallback, neural_fallback=True)
+        return _choose_static(site, good, cfg, code, typ, used, proposer)
     # V1 (2 bit di stile) e V1b (snake/camel)
     if variant == "V1":
         want = 2 * cw[slot.indices[0]] + cw[slot.indices[1]]
@@ -225,6 +259,8 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
         extra.update(skipped_sites=0, n_renamed=0, n_names_no_candidate=0, n_names_unwritable=0)
         if cfg.names_suffix_by_type == "on":
             extra["n_names_type_fallback"] = 0
+        if isinstance(proposer, NeuralProposer):
+            extra["n_names_neural_fallback"] = 0
         return EmbedResult(code, "FAILED", "no_sites", extra)
 
     excluded_sites: set[tuple] = set()
@@ -233,7 +269,7 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
         # 2. nomi
         scope_names = _ScopeNames(index0)
         renames = []
-        no_candidate = unwritable_names = type_fallback = 0
+        no_candidate = unwritable_names = type_fallback = neural_fallback = 0
         chosen: dict[tuple, str] = {}
         for slot in layout0.names:
             assert slot.name is not None
@@ -245,6 +281,8 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
             choice = _choose_name(slot, cw, key, cfg, code, index0, pool, proposer)
             if choice.reason == "no_candidate":
                 no_candidate += 1
+            if choice.neural_fallback:
+                neural_fallback += 1
             if choice.type_fallback:
                 type_fallback += 1
             elif choice.reason == "unwritable":
@@ -325,6 +363,10 @@ def _embed(code: str, bits: list[int], key: int, cfg: Config, proposer: Proposer
                 # filtrato per tipo aveva i bit giusti (solo con l'opzione attiva: con ``off`` il
                 # registro resta quello di prima)
                 extra["n_names_type_fallback"] = type_fallback
+            if isinstance(proposer, NeuralProposer):
+                # MD31: nomi per cui nessun candidato neurale aveva i bit giusti, passati ai
+                # candidati statici (solo con il proponente neurale)
+                extra["n_names_neural_fallback"] = neural_fallback
             status = "OK" if n_bits >= b else "PARTIAL"
             return EmbedResult(code2, status, None, extra)
         excluded_sites |= bad_sites
