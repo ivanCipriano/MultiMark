@@ -12,7 +12,9 @@ import json
 import keyword
 import os
 import random
+import sys
 import textwrap
+import types
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from multimark.names import _BUILTINS, StaticProposer
 from multimark.names_neural import (
     N_CANDIDATES,
     SYSTEM_PROMPT,
+    HFGenerator,
     NeuralProposer,
     build_messages,
     highlighted_source,
@@ -329,3 +332,48 @@ def test_real_model_on_twenty_fixture_functions() -> None:  # pragma: no cover -
             total += 1
     # la qualità (quanti nomi validi restano) si misura a parte, non qui
     assert total == 53
+
+
+def test_hf_generator_passes_torch_dtype(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``from_pretrained`` riceve ``torch_dtype`` (transformers 4.46.3 dell'ambiente posthoc di
+    wm-bench: ``dtype`` finisce in ``Qwen2ForCausalLM.__init__`` e dà TypeError)."""
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    class Model:
+        def to(self, device: str) -> Model:
+            return self
+
+        def eval(self) -> Model:
+            return self
+
+    class AutoModelForCausalLM:
+        @staticmethod
+        def from_pretrained(name: str, **kwargs: object) -> Model:
+            calls.append((name, kwargs))
+            return Model()
+
+    class Tokenizer:
+        pad_token = None
+        eos_token = "<eos>"
+        padding_side = "right"
+
+    class AutoTokenizer:
+        @staticmethod
+        def from_pretrained(name: str, **kwargs: object) -> Tokenizer:
+            return Tokenizer()
+
+    torch = types.ModuleType("torch")
+    torch.float32 = "float32-dtype"  # type: ignore[attr-defined]
+    torch.bfloat16 = "bfloat16-dtype"  # type: ignore[attr-defined]
+    torch.cuda = types.SimpleNamespace(is_available=lambda: False)  # type: ignore[attr-defined]
+    transformers = types.ModuleType("transformers")
+    transformers.AutoModelForCausalLM = AutoModelForCausalLM  # type: ignore[attr-defined]
+    transformers.AutoTokenizer = AutoTokenizer  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "transformers", transformers)
+
+    g = HFGenerator("some/model")
+    assert calls == [("some/model", {"torch_dtype": "float32-dtype"})]
+    assert g.device == "cpu" and g.tokenizer.padding_side == "left"
+    HFGenerator("other", dtype="bfloat16")
+    assert calls[-1] == ("other", {"torch_dtype": "bfloat16-dtype"})

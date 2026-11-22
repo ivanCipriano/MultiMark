@@ -258,7 +258,10 @@ class HFGenerator:
         self.torch = torch
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.model = AutoModelForCausalLM.from_pretrained(model, dtype=getattr(torch, dtype))
+        # ``torch_dtype``, non ``dtype``: con transformers 4.46.3 (ambiente posthoc di wm-bench)
+        # ``dtype`` arriva a ``Qwen2ForCausalLM.__init__`` e dà TypeError; le versioni nuove
+        # accettano ancora ``torch_dtype`` (con un avviso di deprecazione)
+        self.model = AutoModelForCausalLM.from_pretrained(model, torch_dtype=getattr(torch, dtype))
         self.model.to(self.device).eval()
         self.tokenizer.padding_side = "left"
         if self.tokenizer.pad_token is None:
