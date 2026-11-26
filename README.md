@@ -44,6 +44,7 @@ pip install -e ".[dev]"     # più pytest, hypothesis, ruff, mypy
 | `multimark/prf.py`, `codec.py`, `linking.py` | PRF, alfabeto a 6 bit, codice compatto e decodifica per cancellazioni, legame e maschera |
 | `multimark/embed.py`, `detect.py` | inserimento (§3.9) e rilevazione (§3.10) |
 | `multimark/synthetic.py`, `multimark/cli/selftest.py` | frammenti sintetici e autovalidazione di P1 (`docs/milestone_logs/P1_selftest.txt`) |
+| `multimark/cli/demo.py` | dimostratore P7.d: `mark`, `verify`, `show` con le configurazioni congelate |
 
 ## Inventario dei siti
 
@@ -72,6 +73,50 @@ from multimark.detect import detect
 cfg = multimark_base()  # mcss_profile() per la reimplementazione di MCSS
 r = embed(code, "0101…(24 bit)", key, cfg)  # r.code, r.status (OK/PARTIAL/FAILED), r.extra
 d = detect(r.code, "0101…", key, cfg, registry_seed=global_seed)  # d.score, d.extra
+```
+
+## Dimostratore (P7.d)
+
+`python -m multimark.cli.demo` (o `multimark-demo` dopo `pip install -e .`) marca, verifica e mostra
+un file Python con una delle tre configurazioni congelate in P6 (`--preset`):
+
+| Preimpostazione | Metodo | `config_hash` | Soglia τ Qwen / DeepSeek |
+|---|---|---|---|
+| `mcss_main` | `mcss` | `1d3087c73439` | 1,2621 / 1,2621 |
+| `multimark_prudent` (default) | `multimark`, opzioni di B | `e52b040770df` | 1,2274 / 1,3359 |
+| `multimark_high_capacity` | `multimark`, opzioni di D | `3fed1f1c1e24` | 1,5423 / 1,6105 |
+
+Le soglie sono quelle congelate del punteggio principale (`N_reg = 1`, decisione `score ≥ τ`), per il
+modello scelto con `--model {qwen25_coder_7b,deepseek_coder_6p7b}`. La chiave è un intero di 64 bit
+(decimale o `0x…`) letto da `--key-file` (fuori dal repository) o dalla variabile d'ambiente
+`MULTIMARK_KEY` (`--key-env` per cambiarla); non si passa mai sulla riga di comando. Il messaggio è
+di 24 bit: 24 cifre 0/1, `0x` con al più 6 cifre esadecimali o un decimale. Codici di uscita: 0 fatto
+(per `verify`: marchio rilevato), 1 inserimento fallito o marchio non rilevato, 2 errore d'uso.
+
+Esempio 1, chiave nuova e marcatura (scrive `esempio.marked.py` accanto all'originale e non
+sovrascrive mai un file esistente):
+
+```bash
+python -c "import secrets; print(secrets.randbits(64))" > ~/.multimark_key
+python -m multimark.cli.demo mark esempio.py --key-file ~/.multimark_key \
+    --preset multimark_prudent --message 0xABCDEF
+```
+
+Esempio 2, verifica con il messaggio atteso (punteggio, soglia congelata, decisione, messaggio
+della decodifica aperta se c'è; senza `--message` solo la decodifica aperta):
+
+```bash
+python -m multimark.cli.demo verify esempio.marked.py --key-file ~/.multimark_key \
+    --preset multimark_prudent --message 0xABCDEF --model deepseek_coder_6p7b
+```
+
+Esempio 3, chiave dalla variabile d'ambiente; siti letti nel file marcato (funzione, canale, rango,
+bit; con V1 e con due bit per nome il secondo bit di una variabile ha canale `names_b1`) e diff fra
+originale e marcato:
+
+```bash
+export MULTIMARK_KEY="$(cat ~/.multimark_key)"
+python -m multimark.cli.demo show esempio.py --preset multimark_prudent   # usa esempio.marked.py
 ```
 
 ## Sviluppo
