@@ -13,11 +13,16 @@ non ne dipendono.
   contengono la chiave).
 - Nessuna risorsa esterna: niente font, immagini o icone da URL (niente emoji, che Streamlit
   scaricherebbe come favicon).
+- Riquadro «Attacco» fra inserimento e verifica: attacchi deterministici ricopiati dal benchmark
+  (``demo_attacks.py``, seme fisso ``DEMO_SEED``) applicati uno dopo l'altro al codice del
+  riquadro modificabile, e la ri-marcatura T3.1 con una seconda chiave casuale tenuta solo nella
+  memoria del server (``load_remark_key``), mai mostrata né messa in ``st.session_state``.
 """
 
 from __future__ import annotations
 
 import os
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -25,6 +30,7 @@ from typing import Optional
 import streamlit as st
 
 from multimark.cli import demo
+from multimark.cli import demo_attacks as da
 
 
 @dataclass(frozen=True)
@@ -54,6 +60,111 @@ def load_resources(key_file: Optional[str], key_env: str) -> Resources:
     except demo.DemoError as exc:
         return Resources(dict(demo.PRESETS), None, str(exc))
     return Resources(dict(demo.PRESETS), ServerKey(key), None)
+
+
+@st.cache_resource(show_spinner=False)
+def load_remark_key() -> ServerKey:
+    """Seconda chiave della ri-marcatura (T3.1): casuale, una per processo, solo in memoria."""
+    return ServerKey(secrets.randbits(64))
+
+
+STATUS_TEXT = {
+    da.APPLIED: "attacco applicato",
+    da.UNCHANGED: "nessuna modifica (l'attacco non trova punti da cambiare)",
+    da.NOT_APPLICABLE: "attacco non applicabile a questo codice",
+    da.TOOL_ERROR: "attacco non riuscito: il codice resta com'era",
+}
+
+
+def _params_text(result: da.AttackResult) -> str:
+    return ", ".join(f"{k}={v}" for k, v in result.params.items())
+
+
+def _attack_box(preset: str) -> None:
+    st.subheader("Attacco")
+    st.caption(da.ATTACK_NOTE)
+    missing = {i: da.unavailable(i) for i in da.ATTACKS}
+    aid = st.selectbox(
+        "Attacco", list(da.ATTACKS), key="attack_id",
+        format_func=lambda i: da.ATTACKS[i].label + (f" ({missing[i]})" if missing[i] else ""),
+    )  # fmt: skip
+    spec = da.ATTACKS[aid]
+    hint = missing[aid]
+    if hint:
+        st.info(f"Attacco disattivato: {hint}")
+    params: dict[str, object] = {}
+    for col, p in zip(st.columns(max(len(spec.params), 1)), spec.params):
+        wkey = f"atk_{aid}_{p.name}"
+        if p.choices:
+            choices = list(p.choices)
+            params[p.name] = col.selectbox(p.label, choices, index=choices.index(p.default),
+                                           key=wkey, disabled=bool(hint))  # fmt: skip
+        else:
+            params[p.name] = col.text_input(p.label, value=str(p.default), key=wkey)
+    if aid == da.REMARK_ID:
+        st.caption("Stessa preimpostazione, seconda chiave casuale tenuta solo sul server.")
+    else:
+        st.caption(f"Seme fisso degli attacchi: {da.DEMO_SEED} (da wm-bench: {spec.source})")
+    mark = st.session_state.get("mark")
+    has_code = bool(str(st.session_state.get("marked_edit") or "").strip())
+    c1, c2 = st.columns(2)
+    apply = c1.button("Applica attacco", key="attack_btn", disabled=not has_code or bool(hint))
+    restore = c2.button("Ripristina codice marcato", key="restore_btn",
+                        disabled=mark is None or mark.code is None)  # fmt: skip
+    if apply:
+        before = str(st.session_state.get("marked_edit") or "")
+        try:
+            if aid == da.REMARK_ID:
+                bits = demo.parse_hex_message(str(params["message_hex"]))
+                result = da.remark(before, bits, load_remark_key().value, preset)
+            else:
+                result = da.apply_attack(aid, before, params)
+        except demo.DemoError as exc:
+            st.warning(f"Parametro non valido: {exc}.")
+        except Exception as exc:  # avviso leggibile, mai una traccia
+            st.warning(f"Attacco non riuscito: {type(exc).__name__}: {exc}")
+        else:
+            st.session_state["attack_last"] = (before, result)
+            st.session_state["attacks"] = [*st.session_state.get("attacks", []), result]
+            st.session_state["marked_edit"] = result.code
+            st.session_state.pop("verify", None)
+    if restore and mark is not None and mark.code is not None:
+        st.session_state["marked_edit"] = mark.code
+        for k in ("attack_last", "attacks", "verify"):
+            st.session_state.pop(k, None)
+    last = st.session_state.get("attack_last")
+    if last is not None:
+        before, result = last
+        text = f"{result.attack_id} ({_params_text(result)}): {STATUS_TEXT[result.status]}"
+        error = result.detail.get("error") or result.detail.get("reason")
+        if error:
+            text += f" ({error})"
+        if result.status == da.TOOL_ERROR:
+            st.warning(text)
+        else:
+            st.info(text)
+        tool, version = result.detail.get("tool"), result.detail.get("version")
+        if tool and version and version != result.detail.get("pinned"):
+            st.caption(f"{tool} {version} installato; il benchmark usa "
+                       f"{result.detail.get('pinned')}: il risultato può differire.")  # fmt: skip
+        if result.parses:
+            st.success("Il codice attaccato è ancora Python valido.")
+        else:
+            st.error("Il codice attaccato non è più Python valido.")
+        rows = demo.side_by_side(before, result.code)
+        left, right = st.columns(2)
+        left.markdown("**Prima dell'attacco**")
+        left.markdown(demo.diff_html(rows, "left"), unsafe_allow_html=True)
+        right.markdown("**Dopo l'attacco**")
+        right.markdown(demo.diff_html(rows, "right"), unsafe_allow_html=True)
+    history = st.session_state.get("attacks") or []
+    if history:
+        st.markdown("**Attacchi applicati, in ordine**")
+        st.markdown("\n".join(
+            f"{i}. {r.attack_id} ({_params_text(r)}): {r.status}"
+            + ("" if r.parses else ", non è più Python valido")
+            for i, r in enumerate(history, 1)
+        ))  # fmt: skip
 
 
 def _on_upload() -> None:
@@ -170,12 +281,19 @@ def page() -> None:
             st.session_state["original"] = demo.strip_bom(original)
             st.session_state["mark"] = outcome
             st.session_state["marked_edit"] = outcome.code or ""
-            st.session_state.pop("verify", None)
+            for k in ("verify", "attack_last", "attacks"):
+                st.session_state.pop(k, None)
     if "mark" in st.session_state:
         _show_mark(st.session_state["mark"])
 
+    _attack_box(preset)
+
     st.subheader("Verifica")
-    marked = st.text_area("Codice da verificare (modificabile)", height=260, key="marked_edit")
+    marked = st.text_area(
+        "Codice da verificare (modificabile; dopo un attacco è il codice attaccato)",
+        height=260,
+        key="marked_edit",
+    )
     if st.button("Verifica", key="verify_btn", disabled=message is None):
         try:
             st.session_state["verify"] = demo.verify_code(marked, key, preset, model, message)

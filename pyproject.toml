@@ -12,8 +12,10 @@ dependencies = ["libcst"]
 
 [project.optional-dependencies]
 neural = ["torch", "transformers"]
-# Pagina web del dimostratore (multimark/cli/demo_web.py, P7.d): solo lì si importa streamlit.
-demo = ["streamlit>=1.30"]
+# Pagina web del dimostratore (multimark/cli/demo_web.py, P7.d): solo lì si importa streamlit;
+# black, ruff e python-minifier (attacchi T1.1, T1.2, T4.1, solo in multimark/cli/demo_attacks.py)
+# con le versioni fissate in wm-bench (requirements-bench-core.lock).
+demo = ["streamlit>=1.30", "black==24.10.0", "ruff==0.7.4", "python-minifier==2.11.3"]
 dev = ["pytest", "hypothesis", "ruff", "mypy<1.16", "black"]
 
 [project.scripts]

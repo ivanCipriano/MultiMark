@@ -18,6 +18,7 @@ st = pytest.importorskip("streamlit")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 from multimark.cli import demo  # noqa: E402
+from multimark.cli import demo_attacks as da  # noqa: E402
 
 FIXTURE = Path(__file__).parent / "fixtures" / "tiny_functions.jsonl"
 TIMEOUT = 60
@@ -169,3 +170,118 @@ def test_key_from_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _assert_no_key(at, value)
     finally:
         st.cache_resource.clear()
+
+
+# ---------------------------------------------------------------------------- attacchi
+def _marked(at: AppTest) -> str:
+    at.text_area(key="original_input").input(_code())
+    at.button(key="mark_btn").click()
+    at.run()
+    outcome = at.session_state["mark"]
+    assert outcome.code is not None
+    return str(outcome.code)
+
+
+def _apply(at: AppTest, attack_id: str, **params: Any) -> None:
+    at.selectbox(key="attack_id").set_value(attack_id)
+    at.run()
+    specs = {p.name: p for p in da.ATTACKS[attack_id].params}
+    for name, value in params.items():
+        widget_key = f"atk_{attack_id}_{name}"
+        if not specs[name].choices:
+            at.text_input(key=widget_key).input(value)
+        else:
+            at.selectbox(key=widget_key).set_value(value)
+    at.button(key="attack_btn").click()
+    at.run()
+    assert not at.exception, at.exception
+
+
+def test_mark_attack_verify_restore(key: int) -> None:
+    at = _app()
+    marked = _marked(at)
+    assert da.ATTACK_NOTE in [c.value for c in at.caption]
+
+    _apply(at, "T1.4", ratio=1.0)
+    first = da.apply_attack("T1.4", marked, {"ratio": 1.0})
+    assert at.text_area(key="marked_edit").value == first.code
+    assert "Il codice attaccato è ancora Python valido." in [s.value for s in at.success]
+    diff = [m.value for m in at.markdown if demo.DIFF_BG["right"] in m.value]
+    assert len(diff) == 2  # inserimento e attacco
+
+    _apply(at, "T2.5", n=2, position="around")
+    second = da.apply_attack("T2.5", first.code, {"n": 2, "position": "around"})
+    assert at.text_area(key="marked_edit").value == second.code
+    history = [r.attack_id for r in at.session_state["attacks"]]
+    assert history == ["T1.4", "T2.5"]
+    listing = [m.value for m in at.markdown if m.value.startswith("1. T1.4")]
+    assert listing and "2. T2.5" in listing[0]
+
+    at.button(key="verify_btn").click()
+    at.run()
+    v = at.session_state["verify"]
+    expected = demo.verify_code(second.code, key, "multimark_prudent", demo.MODELS[0],
+                                demo.parse_hex_message("ABCDEF"))  # fmt: skip
+    assert v == expected
+    shown = [s.value for s in at.success] + [e.value for e in at.error]
+    assert ("Marchio rilevato." if v.detected else "Marchio non rilevato.") in shown
+
+    at.button(key="restore_btn").click()
+    at.run()
+    assert at.text_area(key="marked_edit").value == marked
+    assert "attacks" not in at.session_state and "verify" not in at.session_state
+    _assert_no_key(at, key)
+
+
+def test_attack_that_breaks_python_is_shown(key: int) -> None:
+    at = _app()
+    _marked(at)
+    at.text_area(key="marked_edit").input("def f(:\n    return 1\n")
+    _apply(at, "T1.4")
+    assert any("attacco non riuscito" in w.value for w in at.warning)
+    assert "Il codice attaccato non è più Python valido." in [e.value for e in at.error]
+
+
+def test_remark_hides_both_keys(key: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    second_key = secrets.randbits(64)
+    real = secrets.randbits
+    monkeypatch.setattr(secrets, "randbits", lambda n: second_key if n == 64 else real(n))
+    at = _app()
+    marked = _marked(at)
+    _apply(at, "T3.1", message_hex="123456")
+    result = at.session_state["attacks"][-1]
+    assert result.attack_id == "T3.1" and result.status == da.APPLIED
+    expected = da.remark(marked, demo.parse_hex_message("123456"), second_key, "multimark_prudent")
+    assert at.text_area(key="marked_edit").value == expected.code
+    _assert_no_key(at, key)
+    _assert_no_key(at, second_key)
+
+
+def test_missing_tool_disables_the_attack(key: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(da, "_have_module", lambda module: False)
+    at = _app()
+    _marked(at)
+    at.selectbox(key="attack_id").set_value("T4.1")
+    at.run()
+    assert at.button(key="attack_btn").disabled
+    assert f"Attacco disattivato: {da.DEMO_EXTRA_HINT}" in [i.value for i in at.info]
+    at.selectbox(key="attack_id").set_value("T1.3")
+    at.run()
+    assert not at.button(key="attack_btn").disabled
+
+
+@pytest.mark.skipif(any(da.unavailable(a) for a in ("T1.1", "T1.2", "T4.1")),
+                    reason=da.DEMO_EXTRA_HINT)  # fmt: skip
+def test_tool_attacks_in_the_page(key: int) -> None:
+    at = _app()
+    marked = _marked(at)
+    code = marked
+    for attack_id, params in (("T1.2", {}), ("T1.1", {}), ("T4.1", {"rename": True})):
+        _apply(at, attack_id, **params)
+        code = da.apply_attack(attack_id, code, params).code
+        assert at.text_area(key="marked_edit").value == code
+    assert [r.attack_id for r in at.session_state["attacks"]] == ["T1.2", "T1.1", "T4.1"]
+    at.button(key="verify_btn").click()
+    at.run()
+    assert not at.exception
+    _assert_no_key(at, key)

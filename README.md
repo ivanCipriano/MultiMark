@@ -44,7 +44,7 @@ pip install -e ".[dev]"     # più pytest, hypothesis, ruff, mypy
 | `multimark/prf.py`, `codec.py`, `linking.py` | PRF, alfabeto a 6 bit, codice compatto e decodifica per cancellazioni, legame e maschera |
 | `multimark/embed.py`, `detect.py` | inserimento (§3.9) e rilevazione (§3.10) |
 | `multimark/synthetic.py`, `multimark/cli/selftest.py` | frammenti sintetici e autovalidazione di P1 (`docs/milestone_logs/P1_selftest.txt`) |
-| `multimark/cli/demo.py`, `multimark/cli/demo_web.py` | dimostratore P7.d: `mark`, `verify`, `show`, `web` (pagina Streamlit) con le configurazioni congelate |
+| `multimark/cli/demo.py`, `multimark/cli/demo_web.py`, `multimark/cli/demo_attacks.py` | dimostratore P7.d: `mark`, `verify`, `show`, `web` (pagina Streamlit con attacchi dimostrativi) con le configurazioni congelate |
 
 ## Inventario dei siti
 
@@ -149,6 +149,43 @@ marchio» (originale e marcato affiancati con le righe cambiate evidenziate, sit
 scaricamento del file marcato), area di testo modificabile con il codice marcato e «Verifica»
 (rilevato o non rilevato, punteggio contro la soglia congelata, messaggio estratto contro atteso).
 Errori di sintassi, codice vuoto o senza siti compaiono come avvisi.
+
+#### Attacchi
+
+Fra «Inserisci marchio» e «Verifica» c'è il riquadro «Attacco»: si sceglie l'attacco e i suoi
+parametri, «Applica attacco» lo applica al codice del riquadro modificabile e mostra prima e dopo
+affiancati; gli attacchi si applicano uno dopo l'altro (elenco sotto il riquadro), «Ripristina codice
+marcato» torna al codice marcato e dopo un attacco «Verifica» lavora sul codice attaccato. La pagina
+dice anche se il codice attaccato è ancora Python valido.
+
+Gli attacchi (`multimark/cli/demo_attacks.py`) sono copie della logica di quelli deterministici del
+benchmark (`wm-bench`, `src/bench/attacks/`), riscritte con `ast`, `tokenize` e `libcst` invece di
+tree-sitter, senza importare niente dal benchmark e senza dipendenze nuove; le scelte casuali usano
+il seme fisso 2026, mostrato nella pagina. I risultati della tesi vengono dal benchmark.
+
+| Attacco | Parametri | Differenze dal benchmark |
+|---|---|---|
+| T1.1 formattazione | — | nessuna (`black` 24.10.0) |
+| T1.2 lint con correzione | — | un file alla volta invece dei lotti (`ruff check --fix`, 0.7.4) |
+| T1.3 rimozione dei commenti | `mode = remove` | commenti trovati con `tokenize` |
+| T1.4 rinomina | `ratio`, `name_kind = random` | nessuna (`natural` manca: usa la raccolta di nomi del benchmark) |
+| T1.5 modifiche localizzate | `k` | analisi con `ast`; `a and b and c` è un solo nodo |
+| T1.6 `snake_case` | `caps` | nessuna |
+| T2.1 refactoring | `b` | solo il catalogo AST: le regole Ruff mancano |
+| T2.4 troncamento | `p`, funzione bersaglio | bersaglio = la funzione indicata (default la prima) invece della funzione d'ingresso del problema |
+| T2.4k tiene k funzioni | `k` | nessuna |
+| T2.5 diluizione | `n`, `position` | raccolta di 4 funzioni MBPP invece di `function_pools` |
+| T3.1 ri-marcatura | messaggio | seconda chiave casuale tenuta solo nella memoria del server, mai mostrata |
+| T4.1 minificazione | `rename` | nessuna (`python-minifier` 2.11.3, `rename_globals` falso) |
+
+T1.1, T1.2 e T4.1 usano `black`, `ruff` e `python-minifier` dell'extra `demo`, con le versioni
+fissate nel benchmark; si importano o si lanciano solo in `demo_attacks.py`. Se mancano, nella pagina
+l'attacco è disattivato con la scritta «richiede pip install multimark[demo]»; se la versione
+installata è diversa, la pagina lo dice sotto il risultato. Con `pip install -e ".[dev,demo]"` il
+`ruff` dell'ambiente diventa lo 0.7.4.
+
+Non ci sono T2.2 e T2.3 (LLM), T4.2 (solo JavaScript), le regole Ruff di T2.1, T1.3 `insert` e T1.4
+`natural` (raccolte di dati del benchmark).
 
 ## Sviluppo
 
