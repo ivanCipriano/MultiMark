@@ -44,7 +44,7 @@ pip install -e ".[dev]"     # più pytest, hypothesis, ruff, mypy
 | `multimark/prf.py`, `codec.py`, `linking.py` | PRF, alfabeto a 6 bit, codice compatto e decodifica per cancellazioni, legame e maschera |
 | `multimark/embed.py`, `detect.py` | inserimento (§3.9) e rilevazione (§3.10) |
 | `multimark/synthetic.py`, `multimark/cli/selftest.py` | frammenti sintetici e autovalidazione di P1 (`docs/milestone_logs/P1_selftest.txt`) |
-| `multimark/cli/demo.py` | dimostratore P7.d: `mark`, `verify`, `show` con le configurazioni congelate |
+| `multimark/cli/demo.py`, `multimark/cli/demo_web.py` | dimostratore P7.d: `mark`, `verify`, `show`, `web` (pagina Streamlit) con le configurazioni congelate |
 
 ## Inventario dei siti
 
@@ -118,6 +118,37 @@ originale e marcato:
 export MULTIMARK_KEY="$(cat ~/.multimark_key)"
 python -m multimark.cli.demo show esempio.py --preset multimark_prudent   # usa esempio.marked.py
 ```
+
+I file si leggono in `utf-8-sig`, quindi vanno bene anche quelli con BOM (per esempio scritti da
+Windows PowerShell con `Out-File -Encoding utf8`).
+
+### Pagina web
+
+`multimark-demo web` avvia in locale la pagina Streamlit `multimark/cli/demo_web.py`
+(`streamlit run`, solo su `127.0.0.1`, porta 8765 di default, `--port` per cambiarla, statistiche
+d'uso di Streamlit spente). Streamlit è nell'extra `demo` e si importa solo in quel file: la libreria
+e wm-bench non ne dipendono; se manca, `multimark-demo web` stampa come installarlo. La pagina non
+carica risorse esterne e funziona senza internet. La chiave si legge solo sul server, da
+`--key-file` o da `MULTIMARK_KEY`, e non compare mai nella pagina né nello stato della sessione.
+
+```bash
+pip install -e ".[demo]"
+multimark-demo web --key-file ~/.multimark_key     # poi http://127.0.0.1:8765
+```
+
+Su Windows (PowerShell):
+
+```powershell
+pip install -e ".[demo]"
+multimark-demo web --key-file "$HOME\.multimark_key"
+```
+
+Nella barra laterale: preimpostazione, modello della soglia, linguaggio (solo Python) e messaggio
+esadecimale (al più 6 cifre). Al centro: caricamento di un file `.py` o area di testo, «Inserisci
+marchio» (originale e marcato affiancati con le righe cambiate evidenziate, siti e bit inseriti,
+scaricamento del file marcato), area di testo modificabile con il codice marcato e «Verifica»
+(rilevato o non rilevato, punteggio contro la soglia congelata, messaggio estratto contro atteso).
+Errori di sintassi, codice vuoto o senza siti compaiono come avvisi.
 
 ## Sviluppo
 

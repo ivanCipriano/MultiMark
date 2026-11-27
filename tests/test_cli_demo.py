@@ -212,7 +212,10 @@ def test_show_lists_sites_and_diff(key: int, source: Path) -> None:
     assert len(rows) == len(res.extra["sites"]) == res.extra["n_votes"]
     assert [r[1:] for r in rows] == [[c, str(rank), str(v)]
                                      for _f, _n, c, rank, _r, v in res.extra["sites"]]  # fmt: skip
-    assert "--- " in out and "+++ " in out and "\n-def has_close_elements" in out
+    assert "--- " in out and "+++ " in out
+    # righe tolte = righe dell'originale (quali cambiano dipende dalla chiave casuale)
+    removed = [line for line in out.splitlines() if line.startswith("-") and line[:3] != "---"]
+    assert removed and all(line[1:] in source.read_text(encoding="utf-8") for line in removed)
 
 
 def test_errors_exit_with_2(key: int, tmp_path: Path) -> None:

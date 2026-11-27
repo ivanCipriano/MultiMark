@@ -11,6 +11,11 @@ preimpostazione (``--preset``):
   se c'è.
 - ``show``: elenca i siti letti nel file marcato (funzione, canale, rango, bit) e stampa il diff
   fra originale e marcato.
+- ``web``: avvia in locale (``127.0.0.1:8765``) la pagina Streamlit ``demo_web.py`` (extra
+  ``[demo]``), con le stesse funzioni di calcolo (``mark_code``, ``verify_code``, ``side_by_side``).
+
+I file si leggono in ``utf-8-sig``: il BOM che PowerShell scrive con ``Out-File -Encoding utf8``
+non rende il codice illeggibile.
 
 La chiave (intero di 64 bit, decimale o ``0x…``) si legge da un file (``--key-file``) o da una
 variabile d'ambiente (``--key-env``, default ``MULTIMARK_KEY``), mai dalla riga di comando in
@@ -24,7 +29,10 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import html
+import importlib.util
 import os
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -183,14 +191,238 @@ def bits_hex(bits: str) -> str:
     return f"{bits} (0x{int(bits, 2):06x})"
 
 
+# ---------------------------------------------------------------------------- calcolo
+# Funzioni pure, senza I/O né Streamlit, usate dalla riga di comando e dalla pagina web
+# (``demo_web.py``). I risultati non contengono mai la chiave.
+BOM = "﻿"
+
+
+def strip_bom(code: str) -> str:
+    """Toglie il BOM iniziale (``Out-File -Encoding utf8`` su Windows lo scrive)."""
+    return code[1:] if code.startswith(BOM) else code
+
+
+@dataclass(frozen=True)
+class MarkOutcome:
+    """Esito di ``mark_code``: ``code`` è il codice marcato (``None`` se l'inserimento fallisce)."""
+
+    preset: str
+    message: str
+    status: str
+    reason: Optional[str]
+    code: Optional[str]
+    n_sites: int
+    codeword_length: Optional[int]
+    by_channel: dict[str, int]
+    n_renamed: int
+    skipped_sites: int
+
+
+@dataclass(frozen=True)
+class VerifyOutcome:
+    """Esito di ``verify_code``; punteggio, soglia e decisione solo con il messaggio atteso."""
+
+    preset: str
+    model: str
+    status: str
+    reason: Optional[str]
+    n_sites: int
+    n_votes: int
+    decoded: Optional[str]
+    decode_status: Optional[str]
+    n_erasures: Optional[int]
+    expected: Optional[str]
+    agreement: Optional[float]
+    bits_correct: Optional[int]
+    score: Optional[float]
+    threshold: Optional[float]
+    detected: Optional[bool]
+
+
+@dataclass(frozen=True)
+class SiteRow:
+    function: str
+    channel: str
+    rank: Optional[int]
+    bit: Optional[int]
+
+
+@dataclass(frozen=True)
+class DiffRow:
+    """Una riga del diff affiancato: numero e testo a sinistra (originale) e a destra (marcato);
+    ``tag`` è ``equal``, ``replace``, ``delete`` o ``insert`` (``difflib.SequenceMatcher``)."""
+
+    left_no: Optional[int]
+    left: str
+    right_no: Optional[int]
+    right: str
+    tag: str
+
+
+def mark_code(code: str, message: str, key: int, preset_name: str) -> MarkOutcome:
+    """Inserisce ``message`` (stringa di 24 bit) in ``code`` con la preimpostazione data."""
+    code = strip_bom(code)
+    if not code.strip():
+        return MarkOutcome(preset_name, message, "FAILED", "empty", None, 0, None, {}, 0, 0)
+    res = embed(code, message, key, PRESETS[preset_name].config())
+    ex = res.extra
+    return MarkOutcome(
+        preset=preset_name,
+        message=message,
+        status=res.status,
+        reason=res.reason,
+        code=None if res.status == "FAILED" else res.code,
+        n_sites=int(ex.get("n_sites") or 0),
+        codeword_length=ex.get("codeword_length"),
+        by_channel={c: n for c, n in (ex.get("n_sites_by_channel") or {}).items() if n},
+        n_renamed=int(ex.get("n_renamed") or 0),
+        skipped_sites=int(ex.get("skipped_sites") or 0),
+    )
+
+
+def _detect(code: str, key: int, preset: Preset, message: Optional[str]) -> Any:
+    # Il messaggio atteso serve solo al punteggio: voti, siti e decodifica aperta non ne dipendono,
+    # quindi senza messaggio si passa un messaggio qualsiasi e il punteggio non si mostra.
+    expected = message if message is not None else "0" * MESSAGE_BITS
+    return detect(code, expected, key, preset.config(), registry_sizes=(1,), method=preset.method)
+
+
+def verify_code(
+    code: str, key: int, preset_name: str, model: str, message: Optional[str] = None
+) -> VerifyOutcome:
+    """Rileva il marchio; con ``message`` (24 bit) punteggio contro la soglia congelata."""
+    preset = PRESETS[preset_name]
+    code = strip_bom(code)
+    if not code.strip():
+        no = False if message is not None else None
+        return VerifyOutcome(preset_name, model, "FAILED", "empty", 0, 0, None, None, None,
+                             message, None, None, None, None, no)  # fmt: skip
+    res = _detect(code, key, preset, message)
+    ex = res.extra
+    ok = res.status == "OK"
+    scored = ok and message is not None
+    tau = preset.thresholds[model] if message is not None else None
+    score = res.score if scored else None
+    detected: Optional[bool] = None
+    if message is not None:
+        detected = score is not None and tau is not None and score >= tau
+    return VerifyOutcome(
+        preset=preset_name,
+        model=model,
+        status=res.status,
+        reason=res.reason,
+        n_sites=int(ex.get("n_sites") or 0),
+        n_votes=int(ex.get("n_votes") or 0),
+        decoded=res.decoded_message if ok else None,
+        decode_status=ex.get("decode_status") if ok else None,
+        n_erasures=ex.get("n_erasures") if ok else None,
+        expected=message,
+        agreement=ex.get("agreement") if scored else None,
+        bits_correct=ex.get("bits_correct") if scored else None,
+        score=score,
+        threshold=tau,
+        detected=detected,
+    )
+
+
+def site_rows(code: str, key: int, preset_name: str) -> list[SiteRow]:
+    """Siti letti in ``code``: funzione, canale (``names_b1`` = secondo bit di un nome), rango,
+    bit votato (``None`` se il nome non si legge)."""
+    res = _detect(strip_bom(code), key, PRESETS[preset_name], None)
+    return [
+        SiteRow(str(fid), str(channel), rank, vote)
+        for fid, _n_params, channel, rank, _value_read, vote in res.extra.get("sites") or []
+    ]
+
+
+def side_by_side(original: str, marked: str) -> list[DiffRow]:
+    """Diff riga per riga allineato per due colonne (righe mancanti come stringa vuota)."""
+    a, b = original.splitlines(), marked.splitlines()
+    rows: list[DiffRow] = []
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        for k in range(max(i2 - i1, j2 - j1)):
+            i, j = i1 + k, j1 + k
+            left_no, left = (i + 1, a[i]) if i < i2 else (None, "")
+            right_no, right = (j + 1, b[j]) if j < j2 else (None, "")
+            rows.append(DiffRow(left_no, left, right_no, right, tag))
+    return rows
+
+
+def unified_diff(original: str, marked: str, from_name: str, to_name: str) -> str:
+    lines = difflib.unified_diff(
+        original.splitlines(keepends=True),
+        marked.splitlines(keepends=True),
+        fromfile=from_name,
+        tofile=to_name,
+    )
+    return "".join(line if line.endswith("\n") else line + "\n" for line in lines)
+
+
+# ---------------------------------------------------------------------------- testi della pagina
+# Spiegazioni leggibili dei motivi di fallimento della libreria (pagina web: avvisi, non tracce).
+REASON_TEXT: dict[str, str] = {
+    "empty": "Il codice è vuoto: incolla del codice Python o carica un file.",
+    "syntax_error": "Il codice non è Python valido (errore di sintassi): correggilo e riprova.",
+    "no_sites": "Nel codice non c'è nessun sito su cui scrivere o leggere bit: è troppo corto o "
+    "non ha costrutti marcabili (servono funzioni con variabili, confronti, assegnamenti).",
+    "rewrite_mismatch": "La riscrittura non si rilegge in modo coerente: il codice non può "
+    "portare il marchio con questa configurazione.",
+}
+MESSAGE_HEX_DIGITS = 6
+
+
+def explain(reason: Optional[str]) -> str:
+    return REASON_TEXT.get(reason or "", f"Operazione non riuscita ({reason}).")
+
+
+def parse_hex_message(text: str) -> str:
+    """Messaggio esadecimale della pagina (al più 6 cifre, ``0x`` facoltativo) → 24 bit."""
+    t = text.strip().replace("_", "").replace(" ", "")
+    t = t[2:] if t.lower().startswith("0x") else t
+    if not t or len(t) > MESSAGE_HEX_DIGITS or any(c not in "0123456789abcdefABCDEF" for c in t):
+        raise DemoError(f"il messaggio deve avere da 1 a {MESSAGE_HEX_DIGITS} cifre esadecimali")
+    return format(int(t, 16), f"0{MESSAGE_BITS}b")
+
+
+DIFF_CSS = (
+    "font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; "
+    "font-size: 0.82rem; line-height: 1.45; overflow-x: auto; white-space: pre; "
+    "border: 1px solid rgba(128,128,128,0.35); border-radius: 6px; padding: 6px 0;"
+)
+DIFF_BG = {"left": "rgba(220, 70, 70, 0.22)", "right": "rgba(40, 170, 90, 0.22)"}
+
+
+def diff_html(rows: Sequence[DiffRow], side: str) -> str:
+    """Una colonna del diff affiancato in HTML (testo con escape, nessuna risorsa esterna): le
+    righe cambiate hanno lo sfondo rosso a sinistra e verde a destra, le righe mancanti sono
+    vuote così le due colonne restano allineate."""
+    out = [f'<div style="{DIFF_CSS}">']
+    for r in rows:
+        no, text = (r.left_no, r.left) if side == "left" else (r.right_no, r.right)
+        bg = DIFF_BG[side] if r.tag != "equal" and no is not None else "transparent"
+        if r.tag != "equal" and no is None:
+            bg = "rgba(128,128,128,0.10)"
+        num = "" if no is None else str(no)
+        out.append(
+            f'<div style="background:{bg}; padding:0 8px;">'
+            f'<span style="opacity:0.5; display:inline-block; width:3.2em; user-select:none;">'
+            f"{num}</span>{html.escape(text) or '&nbsp;'}</div>"
+        )
+    out.append("</div>")
+    return "".join(out)
+
+
 # ---------------------------------------------------------------------------- file
 def marked_path(source: Path) -> Path:
     return source.with_name(f"{source.stem}{MARKED_SUFFIX}{source.suffix or '.py'}")
 
 
 def _read(path: Path) -> str:
+    """Legge un file di codice; ``utf-8-sig`` toglie il BOM che PowerShell scrive con
+    ``Out-File -Encoding utf8``."""
     try:
-        return path.read_text(encoding="utf-8")
+        return path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         raise DemoError(f"file not found: {path}") from None
 
@@ -212,18 +444,15 @@ def cmd_mark(args: argparse.Namespace, out: Any) -> int:
     target = args.output or marked_path(args.file)
     if target.resolve() == args.file.resolve():
         raise DemoError("the marked file must not overwrite the original")
-    res = embed(code, message, key, preset.config())
-    ex = res.extra
+    res = mark_code(code, message, key, args.preset)
     print(f"preset   {args.preset} ({preset.method}, config_hash {preset.config_hash})", file=out)
     print(f"message  {bits_hex(message)}", file=out)
     print(f"status   {res.status}" + (f" ({res.reason})" if res.reason else ""), file=out)
-    if "n_sites" in ex:
-        by = {c: n for c, n in ex["n_sites_by_channel"].items() if n}
-        print(f"sites    {ex['n_sites']} bits written of {ex['codeword_length']} "
-              f"(codeword); by channel {by}", file=out)  # fmt: skip
-        print(f"renamed  {ex.get('n_renamed', 0)} variables; skipped sites "
-              f"{ex.get('skipped_sites', 0)}", file=out)  # fmt: skip
-    if res.status == "FAILED":
+    if res.codeword_length is not None:
+        print(f"sites    {res.n_sites} bits written of {res.codeword_length} "
+              f"(codeword); by channel {res.by_channel}", file=out)  # fmt: skip
+        print(f"renamed  {res.n_renamed} variables; skipped sites {res.skipped_sites}", file=out)
+    if res.code is None:
         print("nothing written: the code cannot carry the mark", file=out)
         return 1
     _write_new(target, res.code)
@@ -231,67 +460,101 @@ def cmd_mark(args: argparse.Namespace, out: Any) -> int:
     return 0
 
 
-def _detect(code: str, key: int, preset: Preset, message: Optional[str]) -> Any:
-    # Il messaggio atteso serve solo al punteggio: voti, siti e decodifica aperta non ne dipendono,
-    # quindi senza --message si passa un messaggio qualsiasi e il punteggio non si mostra.
-    expected = message if message is not None else "0" * MESSAGE_BITS
-    return detect(code, expected, key, preset.config(), registry_sizes=(1,), method=preset.method)
-
-
 def cmd_verify(args: argparse.Namespace, out: Any) -> int:
     preset = PRESETS[args.preset]
     key = read_key(args.key_file, args.key_env)
     message = parse_message(args.message) if args.message is not None else None
-    res = _detect(_read(args.file), key, preset, message)
-    ex = res.extra
+    res = verify_code(_read(args.file), key, args.preset, args.model, message)
     print(f"preset    {args.preset} ({preset.method}, config_hash {preset.config_hash})", file=out)
     print(f"status    {res.status}" + (f" ({res.reason})" if res.reason else ""), file=out)
     if res.status != "OK":
         print("detected  no", file=out)
         return 1
-    print(f"sites     {ex['n_sites']} ({ex['n_votes']} votes)", file=out)
-    decoded = res.decoded_message
-    print(f"decoded   {bits_hex(decoded) if decoded else 'none'} ({ex['decode_status']}, "
-          f"{ex['n_erasures']} erased bits)", file=out)  # fmt: skip
-    if message is None:
+    print(f"sites     {res.n_sites} ({res.n_votes} votes)", file=out)
+    decoded = bits_hex(res.decoded) if res.decoded else "none"
+    print(f"decoded   {decoded} ({res.decode_status}, {res.n_erasures} erased bits)", file=out)
+    if message is None or res.score is None or res.threshold is None:
         print("score     needs the expected message (--message)", file=out)
         return 0
-    tau = preset.thresholds[args.model]
-    hit = res.score is not None and res.score >= tau
     print(f"expected  {bits_hex(message)}", file=out)
-    print(f"agreement {ex['agreement']:g} of {ex['n_votes']}; bits correct {ex['bits_correct']}"
+    print(f"agreement {res.agreement:g} of {res.n_votes}; bits correct {res.bits_correct}"
           f"/{MESSAGE_BITS}", file=out)  # fmt: skip
     print(f"score     {res.score:.4f} (-log10 P[Bin(N, 1/2) >= A])", file=out)
-    print(f"threshold {tau:.4f} (frozen, {args.model})", file=out)
-    print(f"detected  {'yes' if hit else 'no'}", file=out)
-    return 0 if hit else 1
+    print(f"threshold {res.threshold:.4f} (frozen, {args.model})", file=out)
+    print(f"detected  {'yes' if res.detected else 'no'}", file=out)
+    return 0 if res.detected else 1
 
 
 def cmd_show(args: argparse.Namespace, out: Any) -> int:
-    preset = PRESETS[args.preset]
     key = read_key(args.key_file, args.key_env)
     marked_file = args.marked or marked_path(args.file)
     original, marked = _read(args.file), _read(marked_file)
-    res = _detect(marked, key, preset, None)
-    sites = res.extra.get("sites") or []
-    print(f"preset {args.preset}; sites read in {marked_file}: {res.extra.get('n_sites', 0)}",
-          file=out)  # fmt: skip
+    rows = site_rows(marked, key, args.preset)
+    print(f"preset {args.preset}; sites read in {marked_file}: {len(rows)}", file=out)
     print(f"{'function':<24} {'channel':<20} {'rank':>4} {'bit':>3}", file=out)
-    for fid, _n_params, channel, rank, _value_read, vote in sites:
-        bit = "-" if vote is None else str(vote)
-        print(f"{str(fid):<24} {channel:<20} {rank!s:>4} {bit:>3}", file=out)
-    diff = difflib.unified_diff(
-        original.splitlines(keepends=True),
-        marked.splitlines(keepends=True),
-        fromfile=str(args.file),
-        tofile=str(marked_file),
-    )
+    for r in rows:
+        bit = "-" if r.bit is None else str(r.bit)
+        print(f"{r.function:<24} {r.channel:<20} {r.rank!s:>4} {bit:>3}", file=out)
     print("", file=out)
-    out.writelines(line if line.endswith("\n") else line + "\n" for line in diff)
+    out.write(unified_diff(original, marked, str(args.file), str(marked_file)))
     return 0
 
 
+# ---------------------------------------------------------------------------- pagina web
+WEB_SCRIPT = Path(__file__).with_name("demo_web.py")
+# Variabili d'ambiente con cui ``web`` dice alla pagina dove sta la chiave (mai la chiave stessa).
+WEB_KEY_FILE_ENV = "MULTIMARK_DEMO_KEY_FILE"
+WEB_KEY_ENV_ENV = "MULTIMARK_DEMO_KEY_ENV"
+INSTALL_HINT = 'pip install "multimark[demo]"   (from a checkout: pip install -e ".[demo]")'
+
+
+def web_command(host: str, port: int) -> list[str]:
+    """``streamlit run`` della pagina, solo in locale e senza statistiche d'uso inviate fuori."""
+    return [
+        sys.executable, "-m", "streamlit", "run", str(WEB_SCRIPT),
+        "--server.address", host,
+        "--server.port", str(port),
+        "--server.fileWatcherType", "none",
+        "--browser.gatherUsageStats", "false",
+        "--global.developmentMode", "false",
+        "--client.toolbarMode", "minimal",
+    ]  # fmt: skip
+
+
+def web_env(key_file: Optional[Path], key_env: str) -> dict[str, str]:
+    """Ambiente del processo Streamlit: dove leggere la chiave, non la chiave."""
+    env = dict(os.environ)
+    env[WEB_KEY_ENV_ENV] = key_env
+    env.pop(WEB_KEY_FILE_ENV, None)
+    if key_file is not None:
+        env[WEB_KEY_FILE_ENV] = str(key_file.expanduser().resolve())
+    return env
+
+
+def cmd_web(args: argparse.Namespace, out: Any) -> int:
+    if importlib.util.find_spec("streamlit") is None:
+        print(f"streamlit is not installed: {INSTALL_HINT}", file=sys.stderr)
+        return 2
+    read_key(args.key_file, args.key_env)  # errore subito se la chiave manca o non è valida
+    print(f"page on http://{args.host}:{args.port} (Ctrl+C to stop)", file=out, flush=True)
+    try:
+        return subprocess.call(
+            web_command(args.host, args.port), env=web_env(args.key_file, args.key_env)
+        )
+    except KeyboardInterrupt:
+        return 0
+
+
 # ---------------------------------------------------------------------------- parser
+def _key_options(sp: argparse.ArgumentParser) -> None:
+    sp.add_argument("--key-file", type=Path, help="file with the key (outside the repository)")
+    sp.add_argument(
+        "--key-env",
+        default=DEFAULT_KEY_ENV,
+        help=f"environment variable with the key (default {DEFAULT_KEY_ENV})",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="multimark-demo", description=__doc__.splitlines()[0])
     sub = p.add_subparsers(dest="command", required=True)
@@ -299,12 +562,7 @@ def build_parser() -> argparse.ArgumentParser:
     def common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("file", type=Path, help="Python file (the original for mark and show)")
         sp.add_argument("--preset", choices=sorted(PRESETS), default="multimark_prudent")
-        sp.add_argument("--key-file", type=Path, help="file with the key (outside the repository)")
-        sp.add_argument(
-            "--key-env",
-            default=DEFAULT_KEY_ENV,
-            help=f"environment variable with the key (default {DEFAULT_KEY_ENV})",
-        )
+        _key_options(sp)
 
     m = sub.add_parser("mark", help="embed a 24-bit message")
     common(m)
@@ -323,6 +581,12 @@ def build_parser() -> argparse.ArgumentParser:
     common(s)
     s.add_argument("--marked", type=Path, help=f"default: <name>{MARKED_SUFFIX}.py")
     s.set_defaults(func=cmd_show)
+
+    w = sub.add_parser("web", help="local web page (Streamlit, extra [demo])")
+    _key_options(w)
+    w.add_argument("--host", default="127.0.0.1")
+    w.add_argument("--port", type=int, default=8765)
+    w.set_defaults(func=cmd_web)
     return p
 
 

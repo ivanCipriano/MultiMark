@@ -12,6 +12,8 @@ dependencies = ["libcst"]
 
 [project.optional-dependencies]
 neural = ["torch", "transformers"]
+# Pagina web del dimostratore (multimark/cli/demo_web.py, P7.d): solo lì si importa streamlit.
+demo = ["streamlit>=1.30"]
 dev = ["pytest", "hypothesis", "ruff", "mypy<1.16", "black"]
 
 [project.scripts]
@@ -50,7 +52,7 @@ files = ["multimark", "tests"]
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["hypothesis.*", "torch.*", "transformers.*"]
+module = ["hypothesis.*", "torch.*", "transformers.*", "streamlit.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
